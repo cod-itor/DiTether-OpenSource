@@ -47,7 +47,11 @@ final class PhoneLocation: NSObject, ObservableObject, CLLocationManagerDelegate
             return
         }
         isSharing = true
-        backgroundActivity = CLBackgroundActivitySession()
+        // Only "While using" needs a background session, and that session always shows the location
+        // indicator in the Dynamic Island. With "Always" no session (and no indicator) is needed.
+        if status == .authorizedWhenInUse {
+            backgroundActivity = CLBackgroundActivitySession()
+        }
         manager.desiredAccuracy = kCLLocationAccuracyNearestTenMeters
         manager.distanceFilter = distanceFilter
         manager.pausesLocationUpdatesAutomatically = false

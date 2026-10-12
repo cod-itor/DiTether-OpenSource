@@ -38,6 +38,14 @@ final class ProximityBeacon: NSObject, ObservableObject {
         serviceAdded = false
     }
 
+    /// Stops advertising and releases Bluetooth entirely (protection off), so iOS keeps nothing
+    /// registered for DiTether and has no reason to wake it in the background.
+    func shutDown() {
+        stop()
+        manager?.delegate = nil
+        manager = nil
+    }
+
     private func advertiseIfReady() {
         guard wantsAdvertising, let manager, manager.state == .poweredOn else { return }
         if !serviceAdded {

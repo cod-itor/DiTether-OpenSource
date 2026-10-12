@@ -70,16 +70,19 @@ final class PhoneModel: ObservableObject {
         }
         connectivity.start()
 
-        // Keep the Bluetooth beacon on while protection and Bluetooth range are on. It is only created
-        // once permission was given (from the setup checklist), so no prompt appears unannounced.
+        // Keep the Bluetooth beacon on only while protection and Bluetooth range are on. It is only
+        // created once permission was given (from the setup checklist), so no prompt appears
+        // unannounced. With protection off it is released completely, so iOS has no reason to wake
+        // DiTether in the background.
         settings.$settings.map { $0.protectionEnabled && $0.bluetoothRangeEnabled }
+            .removeDuplicates()
             .combineLatest(beacon.$authorization)
             .sink { [weak self] wanted, authorization in
                 guard let self else { return }
                 if wanted && authorization == .allowedAlways {
                     self.beacon.start()
                 } else {
-                    self.beacon.stop()
+                    self.beacon.shutDown()
                 }
             }
             .store(in: &cancellables)
@@ -92,12 +95,15 @@ final class PhoneModel: ObservableObject {
             }
             .store(in: &cancellables)
 
-        // Share the iPhone's position with the watch whenever protection is on and location is allowed.
-        // Not needed while the watch's own Bluetooth link works: that saves the most iPhone battery.
-        settings.$settings.map { ($0.protectionEnabled, $0.detectionMode) }
-            .combineLatest(location.$status, $watchStatus.map { $0?.bluetoothLinked == true })
+        // Share the iPhone's position with the watch only as a fallback: protection on, and the watch
+        // has said its own Bluetooth link is NOT working (or Bluetooth range is turned off). Never just
+        // because the watch has not reported yet, so launching DiTether does not start location.
+        settings.$settings.map { ($0.protectionEnabled, $0.detectionMode, $0.bluetoothRangeEnabled) }
+            .combineLatest(location.$status, $watchStatus.map { $0?.bluetoothLinked })
             .sink { [weak self] values, status, bluetoothLinked in
-                self?.updateLocationSharing(enabled: values.0 && !bluetoothLinked, mode: values.1, status: status)
+                let (protecting, mode, bluetoothRange) = values
+                let needsFallback = !bluetoothRange || bluetoothLinked == false
+                self?.updateLocationSharing(enabled: protecting && needsFallback, mode: mode, status: status)
             }
             .store(in: &cancellables)
 
@@ -155,6 +161,16 @@ final class PhoneModel: ObservableObject {
 
     func removeSafePlaces(at offsets: IndexSet) {
         edit { $0.safePlaces.remove(atOffsets: offsets) }
+    }
+
+    // MARK: - Background work
+
+    /// Everything that can run in the background, stopped at once. Used when DiTether is being
+    /// terminated; turning protection off stops the same things through the settings sinks above.
+    func stopBackgroundWork() {
+        location.stopSharing()
+        beacon.shutDown()
+        ringer.stop()
     }
 
     // MARK: - Location sharing

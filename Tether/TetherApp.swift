@@ -14,6 +14,11 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         return true
     }
 
+    /// Being terminated (for example swiped away while running in the background): stop everything.
+    func applicationWillTerminate(_ application: UIApplication) {
+        model.stopBackgroundWork()
+    }
+
     // DiTether is open, so the ringing has already stopped: no banner needed.
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
                                             willPresent notification: UNNotification,
