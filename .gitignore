@@ -1,0 +1,11 @@
+*.xcodeproj
+xcuserdata/
+DerivedData/
+.build/
+.DS_Store
+Tether/Info.plist
+TetherWatch/Info.plist
+TetherWatch/TetherWatch.entitlements
+Tether/Tether.entitlements
+TetherWatchWidgets/Info.plist
+TetherWatchWidgets/TetherWatchWidgets.entitlements

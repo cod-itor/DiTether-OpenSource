@@ -1,0 +1,10 @@
+// Your personal settings. Edit these two lines (or run ./setup.sh <prefix> <team-id>).
+//
+// BUNDLE_PREFIX    reverse-domain you own or just invent, e.g. com.sokha
+//                  (the apps become <prefix>.tether and <prefix>.tether.watchkitapp)
+// DEVELOPMENT_TEAM your 10-character Apple team ID (Xcode > Settings > Accounts >
+//                  your team > Team ID). Leave empty and pick the team in Xcode's
+//                  "Signing & Capabilities" tab instead if you prefer.
+
+BUNDLE_PREFIX = com.makinmills
+DEVELOPMENT_TEAM = L7XWWSCHZH
