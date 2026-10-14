@@ -4,7 +4,8 @@ import MediaPlayer
 import UIKit
 import UserNotifications
 
-/// Plays a loud, repeating beep so you can find the iPhone (asked for from the watch).
+/// Plays a loud, repeating beep so you can find the iPhone (asked for from the watch or the DiTAG),
+/// or, for a DiTAG left behind, vibrates hard and repeatedly without sound.
 ///
 /// Uses the "playback" audio category, so it rings even with the silent switch on, mixed with any
 /// other audio so iOS allows starting it while DiTether is in the background. While ringing it turns
@@ -12,12 +13,25 @@ import UserNotifications
 /// phone in a bag or face down on a table rattles too. A notification is posted as a fallback.
 /// Stops by itself after 30 seconds, when DiTether is opened, or when the watch says stop.
 ///
+/// The left-behind alarm plays a silent loop instead of the beep: that keeps DiTether running in the
+/// background (audio background mode) so the vibration can repeat, without touching the volume.
+///
 /// iOS has no official way to play at full volume regardless of the volume setting (Critical
 /// Alerts need Apple's approval), so the volume is raised through the system volume slider, the
 /// same way other find-my-phone apps do it.
 @MainActor
 final class PhoneRinger: ObservableObject {
+    enum Reason: Equatable {
+        /// The watch asked: find the iPhone.
+        case watch
+        /// The DiTAG button was double-pressed: find the iPhone.
+        case tag
+        /// A DiTAG was left behind: vibrate, no sound (its notification has the sound).
+        case leftBehind
+    }
+
     @Published private(set) var isRinging = false
+    @Published private(set) var reason: Reason?
 
     private var player: AVAudioPlayer?
     private var stopTask: Task<Void, Never>?
@@ -31,24 +45,33 @@ final class PhoneRinger: ObservableObject {
 
     /// True if the sound started.
     @discardableResult
-    func ring() -> Bool {
+    func ring(_ reason: Reason = .watch) -> Bool {
+        // Finding the iPhone wins over the silent left-behind alarm.
+        if isRinging, self.reason != .leftBehind, reason == .leftBehind { return true }
         stopTask?.cancel()
+        let audible = reason != .leftBehind
         let session = AVAudioSession.sharedInstance()
         do {
             try session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
             try session.setActive(true)
-            let newPlayer = try AVAudioPlayer(data: Self.tone)
+            player?.stop()
+            let newPlayer = try AVAudioPlayer(data: audible ? Self.tone : Self.silence)
             newPlayer.numberOfLoops = -1
-            newPlayer.volume = 1
+            newPlayer.volume = audible ? 1 : 0
             newPlayer.play()
             player = newPlayer
-            raiseVolume(current: session.outputVolume)
+            if audible {
+                raiseVolume(current: session.outputVolume)
+            }
         } catch {
             player = nil
         }
         startVibrating()
-        postNotification()
+        if audible {
+            postNotification(body: reason == .tag ? "Your DiTAG is looking for it." : "Your watch is looking for it.")
+        }
         isRinging = true
+        self.reason = reason
         stopTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: Self.ringDuration * 1_000_000_000)
             guard !Task.isCancelled else { return }
@@ -62,6 +85,7 @@ final class PhoneRinger: ObservableObject {
         stopTask = nil
         guard isRinging else { return }
         isRinging = false
+        reason = nil
         player?.stop()
         player = nil
         vibrateTask?.cancel()
@@ -113,10 +137,10 @@ final class PhoneRinger: ObservableObject {
         }
     }
 
-    private func postNotification() {
+    private func postNotification(body: String) {
         let content = UNMutableNotificationContent()
         content.title = "Here's your iPhone"
-        content.body = "Your watch is looking for it."
+        content.body = body
         content.sound = .default
         content.interruptionLevel = .timeSensitive
         UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: notificationID,
@@ -147,7 +171,13 @@ final class PhoneRinger: ObservableObject {
             samples.append(contentsOf: repeatElement(0, count: Int(Double(rate) * seconds)))
         }
         beep(2_900, 0.22); silence(0.06); beep(3_400, 0.22); silence(0.70)
+        return wav(samples, rate: rate)
+    }()
 
+    /// One second of silence, looped to keep DiTether running while the left-behind alarm vibrates.
+    private static let silence: Data = wav([Int16](repeating: 0, count: 44_100), rate: 44_100)
+
+    private static func wav(_ samples: [Int16], rate: Int) -> Data {
         var data = Data()
         func append<T: FixedWidthInteger>(_ value: T) {
             withUnsafeBytes(of: value.littleEndian) { data.append(contentsOf: $0) }
@@ -160,5 +190,5 @@ final class PhoneRinger: ObservableObject {
         data.append(contentsOf: Array("data".utf8)); append(UInt32(byteCount))
         for sample in samples { append(sample) }
         return data
-    }()
+    }
 }

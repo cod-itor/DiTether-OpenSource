@@ -23,7 +23,7 @@ struct HistoryView: View {
                 if model.events.events.isEmpty {
                     ContentUnavailableView("No alerts yet",
                                            systemImage: "checkmark.shield",
-                                           description: Text("When your watch loses your iPhone and alerts you, it shows up here with the spot where it happened."))
+                                           description: Text("When your watch loses your iPhone, or your DiTAG is left behind, it shows up here with the spot where it happened."))
                 } else {
                     List {
                         ForEach(groups) { group in
@@ -66,7 +66,7 @@ struct EventRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: event.strongAlertAt != nil ? "exclamationmark.octagon.fill" : "exclamationmark.triangle.fill")
+            Image(systemName: icon)
                 .foregroundStyle(event.strongAlertAt != nil ? Color.red : Color.orange)
                 .font(.title3)
             VStack(alignment: .leading, spacing: 2) {
@@ -84,11 +84,17 @@ struct EventRow: View {
         }
     }
 
+    private var icon: String {
+        if event.item != nil { return "tag.fill" }
+        return event.strongAlertAt != nil ? "exclamationmark.octagon.fill" : "exclamationmark.triangle.fill"
+    }
+
     private var summary: String {
+        let prefix = event.item.map { "\($0) left behind · " } ?? ""
         if let duration = event.duration {
-            return "Apart \(Format.duration(duration)), then reconnected"
+            return prefix + "Apart \(Format.duration(duration)), then reconnected"
         }
-        return "Still apart, or not reconnected yet"
+        return prefix + "Still apart, or not reconnected yet"
     }
 }
 
@@ -99,11 +105,12 @@ struct EventDetailView: View {
         List {
             if let fix = event.fix {
                 let coordinate = CLLocationCoordinate2D(latitude: fix.latitude, longitude: fix.longitude)
-                Section("Where your iPhone probably is") {
+                Section("Where your \(event.item ?? "iPhone") probably is") {
                     Map(initialPosition: .region(MKCoordinateRegion(center: coordinate,
                                                                     latitudinalMeters: 400,
                                                                     longitudinalMeters: 400))) {
-                        Marker("iPhone", systemImage: "iphone", coordinate: coordinate)
+                        Marker(event.item ?? "iPhone", systemImage: event.item == nil ? "iphone" : "tag.fill",
+                               coordinate: coordinate)
                     }
                     .frame(height: 240)
                     .listRowInsets(EdgeInsets())
@@ -111,13 +118,17 @@ struct EventDetailView: View {
                     Link(destination: mapsURL(for: fix)) {
                         Label("Open in Maps", systemImage: "map")
                     }
-                    Text("This is where your watch was when the link dropped, accurate to about \(Int(fix.accuracy)) m.")
+                    Text(event.item == nil
+                         ? "This is where your watch was when the link dropped, accurate to about \(Int(fix.accuracy)) m."
+                         : "This is where your iPhone was when the DiTAG went out of range, accurate to about \(Int(fix.accuracy)) m.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
             } else {
                 Section {
-                    Text("No location was available when this happened, for example because location was off or the watch had no signal.")
+                    Text(event.item == nil
+                         ? "No location was available when this happened, for example because location was off or the watch had no signal."
+                         : "No location was saved, for example because location was off or Save location is switched off for the DiTAG.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -137,7 +148,7 @@ struct EventDetailView: View {
             Section("Timeline") {
                 LabeledContent("Link dropped", value: event.startedAt.formatted(date: .omitted, time: .standard))
                 if let soft = event.softAlertAt {
-                    LabeledContent("First reminder", value: soft.formatted(date: .omitted, time: .standard))
+                    LabeledContent(event.item == nil ? "First reminder" : "Alert", value: soft.formatted(date: .omitted, time: .standard))
                 }
                 if let strong = event.strongAlertAt {
                     LabeledContent("Loud alert", value: strong.formatted(date: .omitted, time: .standard))
@@ -157,7 +168,9 @@ struct EventDetailView: View {
     }
 
     private func mapsURL(for fix: GeoFix) -> URL {
-        let text = "https://maps.apple.com/?ll=\(fix.latitude),\(fix.longitude)&q=Last%20known%20iPhone%20spot"
+        let label = event.item == nil ? "Last known iPhone spot" : "Where \(event.item ?? "it") was left"
+        let query = label.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "Last%20known%20spot"
+        let text = "https://maps.apple.com/?ll=\(fix.latitude),\(fix.longitude)&q=\(query)"
         return URL(string: text) ?? URL(string: "https://maps.apple.com")!
     }
 }

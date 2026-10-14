@@ -13,6 +13,8 @@ final class PhoneModel: ObservableObject {
     let beacon = ProximityBeacon()
     let launcher = WatchLauncher()
     let ringer = PhoneRinger()
+    /// The DiTAG key finder. iPhone only, with its own switch: never synced to the watch.
+    let diTag: DiTagManager
 
     enum RingWatchState: Equatable {
         case idle
@@ -50,6 +52,8 @@ final class PhoneModel: ObservableObject {
         self.connectivity = connectivity
         self.location = location
         self.watchStatus = watchStatusFile.load()
+        self.diTag = DiTagManager(store: DiTagSettingsStore(), tetherSettings: settings, events: events,
+                                  location: location, ringer: ringer)
 
         connectivity.onSettings = { [weak self] remote in
             _ = self?.settings.adopt(remote)
@@ -90,6 +94,7 @@ final class PhoneModel: ObservableObject {
         NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)
             .sink { [weak self] _ in
                 self?.beacon.refreshAuthorization()
+                self?.diTag.refreshAuthorization()
                 // Found it: opening DiTether stops the ringing.
                 self?.ringer.stop()
             }
@@ -114,7 +119,9 @@ final class PhoneModel: ObservableObject {
             location.objectWillChange,
             beacon.objectWillChange,
             launcher.objectWillChange,
-            ringer.objectWillChange
+            ringer.objectWillChange,
+            diTag.objectWillChange,
+            diTag.store.objectWillChange
         ]
         for publisher in publishers {
             publisher
@@ -167,10 +174,12 @@ final class PhoneModel: ObservableObject {
 
     /// Everything that can run in the background, stopped at once. Used when DiTether is being
     /// terminated; turning protection off stops the same things through the settings sinks above.
+    /// The DiTAG has its own switch; iOS ends its connection anyway, so it only says it paused.
     func stopBackgroundWork() {
         location.stopSharing()
         beacon.shutDown()
         ringer.stop()
+        diTag.appWillTerminate()
     }
 
     // MARK: - Location sharing

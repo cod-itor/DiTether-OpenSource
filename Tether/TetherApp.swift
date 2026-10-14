@@ -19,11 +19,31 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         model.stopBackgroundWork()
     }
 
-    // DiTether is open, so the ringing has already stopped: no banner needed.
+    // DiTether is open, so the ringing has already stopped: no banner needed. A DiTAG left behind
+    // still shows, since you may be looking at another tab.
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
                                             willPresent notification: UNNotification,
                                             withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
-        completionHandler([])
+        if notification.request.identifier.hasPrefix(DiTagManager.alertNotificationPrefix) {
+            completionHandler([.banner, .list, .sound])
+        } else {
+            completionHandler([])
+        }
+    }
+
+    /// "Left it on purpose" on the DiTAG alert (on the iPhone or the watch): quiet until it is back.
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                            didReceive response: UNNotificationResponse,
+                                            withCompletionHandler completionHandler: @escaping () -> Void) {
+        let action = response.actionIdentifier
+        let tagID = (response.notification.request.content.userInfo[DiTagManager.tagIDKey] as? String)
+            .flatMap(UUID.init(uuidString:))
+        Task { @MainActor in
+            if action == DiTagManager.leaveItAction, let tagID {
+                self.model.diTag.snoozeUntilBack(tagID)
+            }
+            completionHandler()
+        }
     }
 }
 

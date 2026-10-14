@@ -28,6 +28,15 @@ final class PhoneLocation: NSObject, ObservableObject, CLLocationManagerDelegate
         status == .denied || status == .restricted
     }
 
+    /// The last reading iOS already has, without asking for a new one (free: no GPS, no indicator).
+    var lastKnown: GeoFix? {
+        guard isAuthorized, let location = manager.location, location.horizontalAccuracy >= 0 else { return nil }
+        return GeoFix(latitude: location.coordinate.latitude,
+                      longitude: location.coordinate.longitude,
+                      accuracy: location.horizontalAccuracy,
+                      timestamp: location.timestamp)
+    }
+
     func requestAuthorization() {
         manager.requestWhenInUseAuthorization()
     }

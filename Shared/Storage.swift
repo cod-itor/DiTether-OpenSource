@@ -97,6 +97,12 @@ final class EventStore: ObservableObject {
         file.save(events)
     }
 
+    func remove(id: UUID) {
+        guard let index = events.firstIndex(where: { $0.id == id }) else { return }
+        events.remove(at: index)
+        file.save(events)
+    }
+
     func clear() {
         events = []
         file.delete()

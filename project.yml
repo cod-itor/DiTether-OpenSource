@@ -49,10 +49,11 @@ targets:
         NSLocationAlwaysAndWhenInUseUsageDescription: Choose Always so your watch can keep measuring how far you are from your iPhone while it is locked in a bag or on a table. Locations never leave your devices.
         NSHealthShareUsageDescription: DiTether uses Workout access only to open DiTether on your Apple Watch from this iPhone. Nothing is read or saved to Health.
         NSHealthUpdateUsageDescription: DiTether uses Workout access only to open DiTether on your Apple Watch from this iPhone. Nothing is read or saved to Health.
-        NSBluetoothAlwaysUsageDescription: Your Apple Watch connects to this iPhone over Bluetooth to feel how close it is, so it can warn you the moment you walk away from it.
+        NSBluetoothAlwaysUsageDescription: Your Apple Watch connects to this iPhone over Bluetooth to feel how close it is, so it can warn you the moment you walk away from it. DiTether also connects to your DiTAG to tell you when your keys or bag are left behind.
         UIBackgroundModes:
           - location
           - bluetooth-peripheral
+          - bluetooth-central
           - audio
 
     entitlements:
@@ -125,3 +126,13 @@ targets:
       properties:
         com.apple.security.application-groups:
           - group.$(BUNDLE_PREFIX).tether
+
+schemes:
+  Tether:
+    build:
+      targets:
+        Tether: all
+    run:
+      config: Debug
+    archive:
+      config: Release

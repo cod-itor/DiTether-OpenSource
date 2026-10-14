@@ -56,6 +56,17 @@ Your Apple Watch tells you the moment you walk away from your iPhone. DiTether w
 - **Ring my watch** from the iPhone: the watch buzzes and beeps for 20 s.
 - **History with a map:** every alert episode, with where it happened, how far you walked and how long you were apart, plus an "Open in Maps" link.
 
+### DiTAG: your keys and bag too (optional, iPhone only)
+
+Cheap Bluetooth key finders (sold as "iTAG") on your keys, bag or wallet. Add up to 8; each has its own name, switch, snooze and History entries. The iPhone watches them; nothing about them goes to the watch app.
+
+- **Left-behind alert:** when the DiTAG's Bluetooth link drops and it isn't back within a few seconds (adjustable, 0–30 s), the iPhone vibrates hard for up to 30 s and shows "Keys left behind". With the iPhone locked, the notification also appears on your watch, the normal iOS way. A blip at the edge of range leaves no trace.
+- **"Left it on purpose"** right on the notification, and **Snooze**: until it's back in range, or 30 min / 1 h / 3 h / 8 h. Quiet hours and safe places apply too. The watch snooze does not silence your keys.
+- **Play sound on DiTAG,** with a Near / Medium / Far signal reading while the DiTAG tab is open.
+- **Double-press the DiTAG button** to ring the iPhone at full volume, even on silent. Any press stops it.
+- **Battery level,** and History entries with a tag icon and where it was left.
+- **A switch per DiTAG.** Off means no Bluetooth connection and nothing running for it. With none on (or none set up), DiTAG uses no Bluetooth at all.
+
 ### Staying quiet when it's fine
 
 - **Safe places:** home, work and so on, each with an adjustable radius. Quiet is not the same as off: walking out of a safe place without your iPhone alerts you right away.
@@ -201,6 +212,7 @@ flowchart TD
 - The fix for the crash when background GPS turned on (the `UIBackgroundModes` → `location` entry).
 
 **Built and compile-checked, awaiting device test:**
+- Everything DiTAG (setup, beep, battery, double-press ring, left-behind alert and vibration, snooze).
 - Ring iPhone / Ring my watch.
 - The hot/cold finder and the turn-back taps.
 - Vibration styles.
@@ -223,7 +235,8 @@ The watch's **Connection log** (watch Settings → Connection log) records each 
 5. **GPS features need the sky.** Indoors, walk-away distance and turn-back detection can't be relied on. Bluetooth and the timers still work.
 6. **Thresholds may need tuning for your devices.** The −84 dBm "weak" threshold is a starting point. The Connection log shows the dBm values to tune from.
 7. **Only the watch-alerts-for-phone direction is built.** An iPhone alert for a forgotten watch is not.
-8. **The App Store would likely reject this design.** Apple's review guidelines only allow workout sessions for real workouts. This build is meant for personal installs from Xcode.
+8. **DiTAG alerts need DiTether in the background.** iOS keeps the DiTAG connection and wakes DiTether for it while it's in the background, but a swiped-away app is not woken for Bluetooth. You get a "DiTAG paused" notification when that happens. If watch protection is on, the watch's next ping relaunches DiTether, which reconnects and alerts if the DiTAG is no longer in range. Range is about 25 m in the open, less through bags and walls.
+9. **The App Store would likely reject this design.** Apple's review guidelines only allow workout sessions for real workouts. This build is meant for personal installs from Xcode.
 
 ---
 
@@ -254,10 +267,11 @@ Tether/              iPhone app
   PhoneModel           Wires everything together
   ProximityBeacon      Bluetooth signal for the watch
   PhoneLocation        Safe places and fallback location sharing
-  PhoneRinger          "Ring iPhone" sound
+  PhoneRinger          "Ring iPhone" sound and the left-behind vibration
   WatchLauncher        Opens the watch app or the Watch app
   SetupState           Status card and setup checklist logic
-  Views/               Intro, Status, History, Settings, Safe places, Alert timing
+  DiTag/               DiTAG key finder: Bluetooth IDs, settings, DiTagManager
+  Views/               Intro, Status, History, DiTAG, Settings, Safe places, Alert timing
 
 project.yml          XcodeGen spec
 Config/              Personal signing settings

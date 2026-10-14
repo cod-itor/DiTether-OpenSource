@@ -230,6 +230,9 @@ struct LeftBehindEvent: Codable, Identifiable, Equatable {
     var escalatedByDistance: Bool?
     /// Furthest you got from the spot during this episode, in metres.
     var maxDistance: Double?
+    /// What was left behind: nil = the iPhone (created by the watch). Otherwise the DiTAG's name,
+    /// for example "Keys". Only the iPhone sets it; older files and watch events decode it as nil.
+    var item: String?
 
     var wasAlerted: Bool { softAlertAt != nil || strongAlertAt != nil }
     var isOpen: Bool { resolvedAt == nil }
