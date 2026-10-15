@@ -7,6 +7,8 @@ configFiles:
 
 options:
   bundleIdPrefix: com.example
+  # Marks the project as checked by this Xcode, so it stops suggesting "recommended settings".
+  xcodeVersion: "26.6"
   createIntermediateGroups: true
   developmentLanguage: en
   deploymentTarget:
