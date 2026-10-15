@@ -71,7 +71,7 @@ struct SettingsView: View {
                         LabeledContent("Silenced until", value: until.formatted(date: .omitted, time: .shortened))
                         Button("Resume alerts") { model.resumeAlerts() }
                     } else {
-                        Menu("Silence alerts for...") {
+                        Menu("Silence alerts for…") {
                             Button("30 minutes") { model.snooze(minutes: 30) }
                             Button("1 hour") { model.snooze(minutes: 60) }
                             Button("3 hours") { model.snooze(minutes: 180) }

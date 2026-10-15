@@ -5,8 +5,11 @@ import SwiftUI
 /// watch and nothing runs once you leave it.
 struct WatchTagsView: View {
     @EnvironmentObject private var model: WatchModel
+    @Environment(\.scenePhase) private var scenePhase
     @State private var tags: [WatchTagInfo]?
     @State private var unreachable = false
+    /// Bumped by every request, so an older list reply can't overwrite a newer beep reply.
+    @State private var requestNumber = 0
 
     var body: some View {
         List {
@@ -22,7 +25,7 @@ struct WatchTagsView: View {
                     } label: {
                         TagRow(tag: tag)
                     }
-                    .disabled(tag.state != .withYou && !tag.isBeeping)
+                    .disabled(unreachable || (tag.state != .withYou && !tag.isBeeping))
                 }
             } else if !unreachable {
                 ProgressView()
@@ -34,7 +37,10 @@ struct WatchTagsView: View {
             }
         }
         .navigationTitle("DiTAGs")
-        .task {
+        // Only while the screen is really in front of you: with the wrist down the view stays on
+        // screen (the background session keeps DiTether alive), but the polling stops.
+        .task(id: scenePhase) {
+            guard scenePhase == .active else { return }
             while !Task.isCancelled {
                 await send(.list)
                 try? await Task.sleep(nanoseconds: 4_000_000_000)
@@ -43,7 +49,11 @@ struct WatchTagsView: View {
     }
 
     private func send(_ request: TagRequest) async {
-        if let reply = await model.connectivity.request(request) {
+        requestNumber += 1
+        let number = requestNumber
+        let reply = await model.connectivity.request(request)
+        guard number == requestNumber else { return }   // a newer request already answered
+        if let reply {
             tags = reply
             unreachable = false
         } else {

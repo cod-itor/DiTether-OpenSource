@@ -29,7 +29,8 @@ struct RootView: View {
                 .tag(Tab.settings)
         }
         .tint(Theme.brand)
-        .preferredColorScheme(AppAppearance(rawValue: appearance)?.colorScheme)
+        .onAppear { AppAppearance.apply(appearance) }
+        .onChange(of: appearance) { _, newValue in AppAppearance.apply(newValue) }
         // Ringing (or the left-behind vibration) while DiTether is open: one tap stops it.
         .alert(ringTitle, isPresented: Binding(get: { model.ringer.isRinging },
                                                set: { if !$0 { foundIt() } })) {

@@ -6,6 +6,8 @@ struct HomeView: View {
     /// Switches to the Devices tab.
     let openDevices: () -> Void
     @State private var showGuide = false
+    @ScaledMetric(relativeTo: .subheadline) private var chipWidth: CGFloat = 140
+    @ScaledMetric(relativeTo: .subheadline) private var chipHeight: CGFloat = 132
 
     private var settings: TetherSettings { model.settings.settings }
     private var tags: [DiTag] { model.diTag.settings.tags }
@@ -21,7 +23,8 @@ struct HomeView: View {
                 protectionSwitch
 
                 if !openSteps.isEmpty {
-                    SectionTitle("Finish setting up", trailing: "\(openSteps.filter { !$0.isOptional }.count) left")
+                    let required = openSteps.filter { !$0.isOptional }.count
+                    SectionTitle("Finish setting up", trailing: required > 0 ? "\(required) left" : nil)
                     VStack(alignment: .leading, spacing: 14) {
                         ForEach(openSteps) { step in
                             SetupStepLink(step: step)
@@ -107,7 +110,7 @@ struct HomeView: View {
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(Theme.brand)
                     }
-                    .frame(width: 112, height: 132)
+                    .frame(width: chipWidth, height: chipHeight)
                     .background {
                         RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous)
                             .strokeBorder(Theme.brand.opacity(0.4), style: StrokeStyle(lineWidth: 1.5, dash: [6, 5]))
@@ -163,10 +166,11 @@ struct HomeView: View {
                                       isBusy: model.testAlertState == .sending)
                 }
                 .buttonStyle(TileButtonStyle())
+                .disabled(!model.connectivity.isWatchAppInstalled || model.testAlertState == .sending)
 
                 if settings.isSnoozed() {
                     ActionTile(symbol: "bell.fill", title: "Resume alerts",
-                               subtitle: settings.snoozedUntil.map { "Silenced until \($0.formatted(date: .omitted, time: .shortened))" },
+                               subtitle: settings.snoozedUntil.map { "Until \($0.formatted(date: .omitted, time: .shortened))" },
                                color: .green) {
                         model.resumeAlerts()
                     }
@@ -177,8 +181,8 @@ struct HomeView: View {
                         Button("3 hours") { model.snooze(minutes: 180) }
                         Button("8 hours") { model.snooze(minutes: 480) }
                     } label: {
-                        ActionTileContent(symbol: "moon.zzz.fill", title: "Silence watch",
-                                          subtitle: "Pause iPhone alerts", color: .indigo)
+                        ActionTileContent(symbol: "moon.zzz.fill", title: "Silence alerts",
+                                          subtitle: "For a while", color: .indigo)
                     }
                     .buttonStyle(TileButtonStyle())
                 }
@@ -203,15 +207,15 @@ struct HomeView: View {
         switch model.ringWatchState {
         case .idle, .sending: return "Find it by sound"
         case .ringing: return "Ringing now"
-        case .failed: return "Can't reach it"
+        case .failed: return "Not reachable"
         }
     }
 
     private var testSubtitle: String {
         switch model.testAlertState {
-        case .idle, .sending: return "See it on your watch"
-        case .sent: return "Sent, check your watch"
-        case .failed: return "Couldn't reach watch"
+        case .idle, .sending: return model.connectivity.isWatchAppInstalled ? "See it on your watch" : "Install on watch first"
+        case .sent: return "Sent: check watch"
+        case .failed: return "Not reachable"
         }
     }
 
@@ -252,6 +256,7 @@ struct ActionTileContent: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
+                    .minimumScaleFactor(0.8)
             }
         }
         .card(padding: 14)
@@ -266,6 +271,8 @@ struct DeviceChip: View {
     let color: Color
     var battery: Int?
     @Environment(\.colorScheme) private var scheme
+    @ScaledMetric(relativeTo: .subheadline) private var width: CGFloat = 140
+    @ScaledMetric(relativeTo: .subheadline) private var height: CGFloat = 132
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -294,7 +301,7 @@ struct DeviceChip: View {
             }
         }
         .padding(14)
-        .frame(width: 140, height: 132, alignment: .leading)
+        .frame(width: width, height: height, alignment: .leading)
         .background(Color(.secondarySystemGroupedBackground),
                     in: RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous))
         .overlay {

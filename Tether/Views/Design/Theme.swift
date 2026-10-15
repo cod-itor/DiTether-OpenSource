@@ -45,11 +45,22 @@ enum AppAppearance: String, CaseIterable, Identifiable {
         }
     }
 
-    var colorScheme: ColorScheme? {
+    var interfaceStyle: UIUserInterfaceStyle {
         switch self {
-        case .system: return nil
+        case .system: return .unspecified
         case .light: return .light
         case .dark: return .dark
+        }
+    }
+
+    /// Set on the window rather than with `preferredColorScheme`, which on iOS 17 and 18 does not
+    /// always switch back to System. Sheets and full-screen covers follow the window.
+    static func apply(_ rawValue: String) {
+        let style = (AppAppearance(rawValue: rawValue) ?? .system).interfaceStyle
+        for scene in UIApplication.shared.connectedScenes {
+            for window in (scene as? UIWindowScene)?.windows ?? [] {
+                window.overrideUserInterfaceStyle = style
+            }
         }
     }
 }
@@ -153,6 +164,7 @@ struct StatusPill: View {
     let text: String
     var color: Color
     var symbol: String?
+    @Environment(\.colorScheme) private var scheme
 
     var body: some View {
         HStack(spacing: 4) {
@@ -164,10 +176,12 @@ struct StatusPill: View {
                 .font(.caption.weight(.semibold))
                 .lineLimit(1)
         }
+        // Darker text on light backgrounds: plain green or orange on a pale wash is hard to read.
+        .foregroundStyle(color)
+        .brightness(scheme == .dark ? 0 : -0.2)
         .padding(.horizontal, 9)
         .padding(.vertical, 4)
-        .foregroundStyle(color)
-        .background(color.opacity(0.14), in: Capsule())
+        .background(color.opacity(scheme == .dark ? 0.2 : 0.14), in: Capsule())
     }
 }
 
@@ -176,25 +190,49 @@ struct LiveDot: View {
     var color: Color
     var pulsing = true
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var animate = false
 
     var body: some View {
         ZStack {
             if pulsing && !reduceMotion {
-                Circle()
-                    .fill(color.opacity(0.35))
+                RippleCircle(color: color.opacity(0.35), filled: true, from: 0.6, to: 1.6, duration: 1.6)
                     .frame(width: 16, height: 16)
-                    .scaleEffect(animate ? 1.6 : 0.6)
-                    .opacity(animate ? 0 : 1)
             }
             Circle()
                 .fill(color)
                 .frame(width: 8, height: 8)
         }
         .frame(width: 16, height: 16)
+        .accessibilityHidden(true)
+    }
+}
+
+/// A circle that grows and fades, over and over. It starts its own animation when it is
+/// inserted, so it also works when it only appears later (for example once protection is live).
+struct RippleCircle: View {
+    var color: Color
+    var filled = false
+    var lineWidth: CGFloat = 2
+    var from: CGFloat = 0.9
+    var to: CGFloat = 1.55
+    var duration: Double = 2.4
+    var delay: Double = 0
+
+    @State private var expanded = false
+
+    var body: some View {
+        Group {
+            if filled {
+                Circle().fill(color)
+            } else {
+                Circle().stroke(color, lineWidth: lineWidth)
+            }
+        }
+        .scaleEffect(expanded ? to : from)
+        .opacity(expanded ? 0 : 1)
         .onAppear {
-            guard pulsing && !reduceMotion else { return }
-            withAnimation(.easeOut(duration: 1.6).repeatForever(autoreverses: false)) { animate = true }
+            withAnimation(.easeOut(duration: duration).repeatForever(autoreverses: false).delay(delay)) {
+                expanded = true
+            }
         }
     }
 }
@@ -256,6 +294,7 @@ struct SignalBars: View {
 /// Full-width rounded button with the brand gradient.
 struct PrimaryButtonStyle: ButtonStyle {
     var color: Color?
+    @Environment(\.isEnabled) private var isEnabled
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
@@ -266,8 +305,11 @@ struct PrimaryButtonStyle: ButtonStyle {
             .background {
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
                     .fill(color.map { AnyShapeStyle($0.gradient) } ?? AnyShapeStyle(Theme.brandGradient))
+                // Deepens bright fills (green, orange) so the white label stays readable.
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(Color.black.opacity(0.18))
             }
-            .opacity(configuration.isPressed ? 0.85 : 1)
+            .opacity(isEnabled ? (configuration.isPressed ? 0.85 : 1) : 0.4)
             .scaleEffect(configuration.isPressed ? 0.98 : 1)
             .animation(.easeOut(duration: 0.15), value: configuration.isPressed)
     }
@@ -291,8 +333,11 @@ struct ActionTile: View {
 }
 
 struct TileButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
+
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
+            .opacity(isEnabled ? 1 : 0.45)
             .scaleEffect(configuration.isPressed ? 0.97 : 1)
             .animation(.easeOut(duration: 0.15), value: configuration.isPressed)
     }

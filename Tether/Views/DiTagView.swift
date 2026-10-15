@@ -8,6 +8,8 @@ struct DiTagDetailView: View {
     let tagID: UUID
 
     @State private var confirmForget = false
+    /// Forgotten once the screen has gone, so the pop animation never shows an empty page.
+    @State private var forgetOnLeave = false
     @State private var nameDraft = ""
     @FocusState private var editingName: Bool
 
@@ -21,8 +23,12 @@ struct DiTagDetailView: View {
                 ContentUnavailableView("DiTAG removed", systemImage: "tag.slash")
             }
         }
+        .task { nameDraft = manager.settings.tag(tagID)?.displayName ?? "" }
         .onAppear { manager.setSignalWanted(tagID, true) }
-        .onDisappear { manager.setSignalWanted(tagID, false) }
+        .onDisappear {
+            manager.setSignalWanted(tagID, false)
+            if forgetOnLeave { manager.forget(tagID) }
+        }
     }
 
     private func form(_ tag: DiTag, status: DiTagManager.TagStatus) -> some View {
@@ -90,7 +96,6 @@ struct DiTagDetailView: View {
                     .focused($editingName)
                     .submitLabel(.done)
                     .onSubmit(saveName)
-                    .onAppear { nameDraft = tag.name }
                     .onChange(of: editingName) { _, editing in
                         if !editing { saveName() }
                     }
@@ -108,8 +113,8 @@ struct DiTagDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .confirmationDialog("Forget \(tag.displayName)?", isPresented: $confirmForget, titleVisibility: .visible) {
             Button("Forget DiTAG", role: .destructive) {
+                forgetOnLeave = true
                 dismiss()
-                manager.forget(tagID)
             }
         } message: {
             Text("DiTether disconnects and stops watching it. You can add it again any time.")
@@ -253,7 +258,7 @@ struct NameSuggestions: View {
                         .padding(.horizontal, 12)
                         .padding(.vertical, 6)
                         .foregroundStyle(isSelected ? .white : Theme.brand)
-                        .background(isSelected ? AnyShapeStyle(Theme.brand) : AnyShapeStyle(Theme.brand.opacity(0.12)),
+                        .background(isSelected ? AnyShapeStyle(Theme.brandDeep) : AnyShapeStyle(Theme.brand.opacity(0.12)),
                                     in: Capsule())
                 }
             }

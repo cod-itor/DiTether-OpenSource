@@ -49,6 +49,7 @@ struct HistoryView: View {
                         } label: {
                             Image(systemName: "trash")
                         }
+                        .accessibilityLabel("Clear history")
                     }
                 }
             }

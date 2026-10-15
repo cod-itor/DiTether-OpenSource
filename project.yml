@@ -136,3 +136,11 @@ schemes:
       config: Debug
     archive:
       config: Release
+  TetherWatch:
+    build:
+      targets:
+        TetherWatch: all
+    run:
+      config: Debug
+    archive:
+      config: Release

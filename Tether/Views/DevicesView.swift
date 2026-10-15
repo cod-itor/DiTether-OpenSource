@@ -171,24 +171,10 @@ private struct WatchCard: View {
                               value: model.connectivity.isWatchAppInstalled ? "Installed" : "Not installed")
                 }
 
-                HStack(spacing: 10) {
-                    Button {
-                        model.ringWatch()
-                    } label: {
-                        Label(ringTitle, systemImage: "speaker.wave.2.fill")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.bordered)
-                    .tint(.blue)
-                    .disabled(model.ringWatchState == .sending)
-
-                    Button {
-                        model.launcher.openOnWatch()
-                    } label: {
-                        Label("Open on watch", systemImage: "arrow.up.forward.app")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.bordered)
+                // Side by side when they fit, stacked on small iPhones or with large text.
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 10) { watchButtons }
+                    VStack(spacing: 10) { watchButtons }
                 }
                 .font(.subheadline.weight(.semibold))
                 .controlSize(.large)
@@ -198,6 +184,29 @@ private struct WatchCard: View {
             }
         }
         .card()
+    }
+
+    @ViewBuilder
+    private var watchButtons: some View {
+        Button {
+            model.ringWatch()
+        } label: {
+            Label(ringTitle, systemImage: "speaker.wave.2.fill")
+                .lineLimit(1)
+                .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.bordered)
+        .tint(.blue)
+        .disabled(model.ringWatchState == .sending)
+
+        Button {
+            model.launcher.openOnWatch()
+        } label: {
+            Label("Open on watch", systemImage: "arrow.up.forward.app")
+                .lineLimit(1)
+                .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.bordered)
     }
 
     private var ringTitle: String {
@@ -278,7 +287,7 @@ private struct PhoneCard: View {
     }
 
     private var bluetoothText: String {
-        if !settings.bluetoothRangeEnabled { return "Off in Settings" }
+        if !settings.bluetoothRangeEnabled { return "Off in Alert timing" }
         if model.beacon.isDenied { return "Not allowed" }
         if !model.beacon.isAllowed { return "Not set up" }
         return settings.protectionEnabled ? "On" : "Off with protection"

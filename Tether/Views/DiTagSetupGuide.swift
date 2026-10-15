@@ -30,7 +30,9 @@ struct DiTagSetupGuide: View {
         NavigationStack {
             VStack(spacing: 0) {
                 if step != .done {
-                    ProgressDots(current: step.rawValue, count: Step.connect.rawValue + 1)
+                    // Without the intro page there is one dot less.
+                    let skipped = startedAtIntro ? 0 : 1
+                    ProgressDots(current: step.rawValue - skipped, count: Step.connect.rawValue + 1 - skipped)
                         .padding(.top, 4)
                 }
                 ScrollView {
@@ -68,7 +70,7 @@ struct DiTagSetupGuide: View {
         }
         .interactiveDismissDisabled(manager.setupPhase != nil)
         .onChange(of: manager.lastAddedID) { _, id in
-            guard let id, step == .connect else { return }
+            guard let id, step == .connect, manager.settings.tag(id) != nil else { return }
             addedID = id
             name = manager.settings.tag(id)?.displayName ?? "Keys"
             go(to: .done)
@@ -190,6 +192,12 @@ struct DiTagSetupGuide: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             }
+            if !manager.canAddMore {
+                Label("You already have \(DiTagSettings.maxTags) DiTAGs, the most iOS can keep connected. Forget one in Devices to add another.",
+                      systemImage: "exclamationmark.triangle.fill")
+                    .font(.subheadline)
+                    .foregroundStyle(.orange)
+            }
             if manager.bluetooth == .unauthorized {
                 VStack(spacing: 10) {
                     Label("Bluetooth is not allowed for DiTether.", systemImage: "exclamationmark.triangle.fill")
@@ -257,7 +265,7 @@ struct DiTagSetupGuide: View {
                            text: "Press the DiTAG button twice quickly.")
                 GuidePoint(symbol: "moon.zzz.fill", color: .indigo,
                            title: "Leaving it on purpose?",
-                           text: "Snooze it on its screen, or tap Left it on purpose on the alert.")
+                           text: "Snooze it in Devices, or tap Left it on purpose on the alert.")
                 GuidePoint(symbol: "rectangle.stack.fill", color: .orange,
                            title: "Keep DiTether in the background",
                            text: "Don't swipe it away, or the DiTAG alerts pause.")
@@ -321,7 +329,10 @@ struct DiTagSetupGuide: View {
 
     private func go(to next: Step, forward: Bool = true) {
         goingForward = forward
-        withAnimation(.snappy) { step = next }
+        // One update later, so the page that leaves already knows which way to slide.
+        DispatchQueue.main.async {
+            withAnimation(.snappy) { step = next }
+        }
     }
 }
 
@@ -337,6 +348,7 @@ private struct GuidePage<Art: View, Content: View>: View {
         VStack(spacing: 24) {
             art
                 .frame(height: 200)
+                .accessibilityHidden(true)
             VStack(spacing: 8) {
                 Text(title)
                     .font(.title.bold())
@@ -453,13 +465,13 @@ private struct FreeUpArt: View {
                 .frame(width: 190, height: 190)
             IconBadge(symbol: "tag.fill", color: Theme.brand, size: 80, filled: true)
             IconBadge(symbol: "app.connected.to.app.below.fill", color: .gray, size: 52, filled: true)
-                .offset(x: -66, y: -54)
                 .overlay(alignment: .topTrailing) {
                     Image(systemName: "xmark.circle.fill")
                         .font(.title2)
                         .foregroundStyle(.white, .red)
-                        .offset(x: -50, y: -66)
+                        .offset(x: 8, y: -8)
                 }
+                .offset(x: -66, y: -54)
             IconBadge(symbol: "iphone", color: Theme.brandDeep, size: 52, filled: true)
                 .offset(x: 66, y: 54)
         }
@@ -494,24 +506,24 @@ private struct CloseArt: View {
 private struct RadarArt: View {
     let isScanning: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var sweep = false
 
     var body: some View {
         ZStack {
             ForEach(0..<3, id: \.self) { ring in
-                Circle()
-                    .stroke(Theme.brand.opacity(isScanning ? 0.5 : 0.15), lineWidth: 2)
-                    .scaleEffect(isScanning && !reduceMotion ? (sweep ? 1.0 : 0.3) : 0.45 + Double(ring) * 0.25)
-                    .opacity(isScanning && !reduceMotion ? (sweep ? 0 : 1) : 1)
-                    .animation(isScanning && !reduceMotion
-                               ? .easeOut(duration: 2.1).repeatForever(autoreverses: false).delay(Double(ring) * 0.7)
-                               : .default,
-                               value: sweep)
+                if isScanning && !reduceMotion {
+                    // Inserted when scanning starts, so each ring starts its own sweep.
+                    RippleCircle(color: Theme.brand.opacity(0.5), from: 0.3, to: 1.0,
+                                 duration: 2.1, delay: Double(ring) * 0.7)
+                } else {
+                    Circle()
+                        .stroke(Theme.brand.opacity(isScanning ? 0.5 : 0.15), lineWidth: 2)
+                        .scaleEffect(0.45 + Double(ring) * 0.25)
+                }
             }
             .frame(width: 200, height: 200)
             IconBadge(symbol: "iphone.radiowaves.left.and.right", color: Theme.brand, size: 76, filled: true)
                 .shadow(color: Theme.brand.opacity(0.4), radius: 10, y: 4)
         }
-        .onAppear { sweep = true }
+        .accessibilityHidden(true)
     }
 }

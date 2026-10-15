@@ -78,7 +78,7 @@ final class DiTagManager: NSObject, ObservableObject {
     /// The DiTAG added most recently, so the setup guide can move on to naming it.
     @Published private(set) var lastAddedID: UUID?
 
-    /// What happened, newest first, so a walk test can be checked afterwards (DiTAG → Activity).
+    /// What happened, newest first, so a walk test can be checked afterwards (Devices → Activity).
     struct ActivityLine: Codable, Identifiable, Equatable {
         var id = UUID()
         var date: Date
@@ -123,6 +123,8 @@ final class DiTagManager: NSObject, ObservableObject {
         /// Early warning: weak readings in a row, and whether this weak spell was already announced.
         var weakCount = 0
         var farWarned = false
+        /// When the last real (alerted) episode ended, to calm a DiTAG flickering at the edge of range.
+        var lastEndedAt: Date?
 
         init(id: UUID) { self.id = id }
 
@@ -138,10 +140,16 @@ final class DiTagManager: NSObject, ObservableObject {
         /// safe place), so nothing was recorded.
         var eventID: UUID?
         var startedAt: Date
+        /// Back within this long = a blip: no trace in History.
+        var blipWindow: TimeInterval = DiTagManager.blipWindow
     }
 
     /// Back within this long = a blip at the edge of range: the alert stops and leaves no History entry.
-    private static let blipWindow: TimeInterval = 5
+    nonisolated fileprivate static let blipWindow: TimeInterval = 5
+    /// Out of range again this soon after the last alert: probably the edge of range, so the next
+    /// alert waits a little (and the vibration loop is skipped) instead of going off at once.
+    private static let flickerWindow: TimeInterval = 60
+    private static let flickerDelay: TimeInterval = 10
 
     private var links: [UUID: Link] = [:]
     /// DiTAGs whose left-behind vibration is going.
@@ -195,6 +203,12 @@ final class DiTagManager: NSObject, ObservableObject {
         super.init()
         activity = activityFile.load() ?? []
         registerNotificationActions()
+        UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: ["ditag.paused"])
+        // DiTAG episodes that were still open when DiTether last stopped can't be followed any more.
+        for var event in events.events where event.item != nil && event.resolvedAt == nil {
+            event.resolvedAt = Date()
+            events.upsert(event)
+        }
         // Created right away when a DiTAG is in use, because iOS expects the restored manager to be
         // recreated during launch when it relaunches DiTether for a Bluetooth event.
         reconcile()
@@ -287,6 +301,7 @@ final class DiTagManager: NSObject, ObservableObject {
         guard canAddMore else { return }
         cancelSetupWork()
         setupMessage = nil
+        lastAddedID = nil   // so adding the same DiTAG again still counts as a change
         candidates = [:]
         setupPhase = .scanning
         let manager = ensureCentral()
@@ -578,19 +593,35 @@ final class DiTagManager: NSObject, ObservableObject {
             return
         }
 
-        // Alert right now, while iOS has DiTether awake for the disconnect: vibrate in a loop (the
-        // silent audio keeps DiTether running), plus notifications that iOS repeats by itself.
-        alarming.insert(link.id)
-        let loud = settings.alarmSound
-        let started = ringer.ring(.leftBehind, sound: loud)
-        scheduleAlert(for: tag)
-        log(link.id, started ? (loud ? "Alert: sound + vibrating" : "Alert: vibrating")
-                             : "Alert: notifications only (iOS blocked the alarm loop)")
+        let flickering = link.lastEndedAt.map { lostAt.timeIntervalSince($0) < Self.flickerWindow } ?? false
+        var episode = LostEpisode(eventID: nil, startedAt: lostAt)
+        if flickering {
+            // Just came back and dropped again: alert in 10 s unless it is back by then. Scheduled
+            // notifications still fire if iOS suspends DiTether, and each one buzzes.
+            scheduleAlert(for: tag, after: Self.flickerDelay)
+            episode.blipWindow = Self.flickerDelay + 1
+            log(link.id, "Out of range again: alert in \(Int(Self.flickerDelay)) s unless it's back")
+        } else {
+            // Alert right now, while iOS has DiTether awake for the disconnect: vibrate in a loop
+            // (the silent audio keeps DiTether running), plus notifications iOS repeats by itself.
+            let alreadyRinging = ringer.isRinging && ringer.reason != .leftBehind
+            alarming.insert(link.id)
+            let loud = settings.alarmSound
+            let started = ringer.ring(.leftBehind, sound: loud)
+            scheduleAlert(for: tag)
+            if alreadyRinging {
+                log(link.id, "Alert: iPhone was already ringing")
+            } else {
+                log(link.id, started ? (loud ? "Alert: sound + vibrating" : "Alert: vibrating")
+                                     : "Alert: notifications only (iOS blocked the alarm loop)")
+            }
+        }
 
-        var event = LeftBehindEvent(startedAt: lostAt, softAlertAt: lostAt, fix: fix)
+        var event = LeftBehindEvent(startedAt: lostAt, softAlertAt: lostAt.addingTimeInterval(flickering ? Self.flickerDelay : 0), fix: fix)
         event.item = tag.displayName
         events.upsert(event)
-        link.episode = LostEpisode(eventID: event.id, startedAt: lostAt)
+        episode.eventID = event.id
+        link.episode = episode
     }
 
     private func requestFreshFix(for link: Link) {
@@ -614,12 +645,14 @@ final class DiTagManager: NSObject, ObservableObject {
     /// A fresh position: remember it as where the DiTAG was left, store it with the event, and stop
     /// the alert after all if it turns out to be in a safe place (left at home is fine).
     private func adoptFreshFix(_ fix: GeoFix?, link: Link) {
-        guard let fix, let episode = link.episode, let tag = settings.tag(link.id) else { return }
+        guard let fix, let episode = link.episode, settings.tag(link.id) != nil else { return }
         store.editTag(link.id) { $0.lastLeftFix = fix }
         guard let eventID = episode.eventID,
               var event = events.events.first(where: { $0.id == eventID }) else { return }
-        if let reason = quietReason(for: tag, fix: fix) {
-            log(link.id, "Alert stopped: \(reason)")
+        // Only a safe place can stop it now; a snooze tapped meanwhile keeps the History entry.
+        let shared = tetherSettings.settings
+        if shared.muteInSafePlaces, let place = Suppression.safePlace(for: fix, in: shared.safePlaces) {
+            log(link.id, "Alert stopped: at \(place.name)")
             silencePendingAlert(link.id)
             UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: Self.alertIDs(link.id))
             events.remove(id: eventID)
@@ -640,9 +673,9 @@ final class DiTagManager: NSObject, ObservableObject {
         guard settings.earlyWarning, let tag = settings.tag(link.id) else { return }
         if rssi < Self.weakRSSI {
             link.weakCount += 1
-        } else if rssi > Self.recoveredRSSI {
-            link.weakCount = 0
-            clearFarWarning(link)
+        } else {
+            link.weakCount = 0   // weak readings must come in a row
+            if rssi > Self.recoveredRSSI { clearFarWarning(link) }
         }
         guard link.weakCount >= Self.weakReadingsNeeded, !link.farWarned else { return }
         link.farWarned = true
@@ -701,7 +734,7 @@ final class DiTagManager: NSObject, ObservableObject {
         alertNotificationPrefix + id.uuidString
     }
 
-    private func scheduleAlert(for tag: DiTag) {
+    private func scheduleAlert(for tag: DiTag, after start: TimeInterval = 0) {
         let content = UNMutableNotificationContent()
         content.title = "\(tag.displayName) left behind"
         content.body = "Your DiTAG is out of range."
@@ -713,7 +746,7 @@ final class DiTagManager: NSObject, ObservableObject {
         // Scheduled notifications fire even if iOS suspends DiTether, and each one vibrates.
         let center = UNUserNotificationCenter.current()
         for (index, identifier) in Self.alertIDs(tag.id).enumerated() {
-            let delay = Double(index) * Self.followUpSpacing
+            let delay = start + Double(index) * Self.followUpSpacing
             let trigger = delay > 0 ? UNTimeIntervalNotificationTrigger(timeInterval: delay, repeats: false) : nil
             let item = (content.mutableCopy() as? UNMutableNotificationContent) ?? content
             if index > 0 {
@@ -734,6 +767,7 @@ final class DiTagManager: NSObject, ObservableObject {
 
     /// You've seen it (opened DiTether or tapped Found it): no more follow-up buzzes.
     func stopFollowUps() {
+        alarming.removeAll()
         let ids = links.values.filter { $0.episode != nil }.flatMap { Self.followUpIDs($0.id) }
         guard !ids.isEmpty else { return }
         let center = UNUserNotificationCenter.current()
@@ -763,13 +797,18 @@ final class DiTagManager: NSObject, ObservableObject {
         stopAlarm(link.id)
         guard let eventID = current.eventID,
               var event = events.events.first(where: { $0.id == eventID }) else { return }
-        if Date().timeIntervalSince(current.startedAt) < Self.blipWindow {
+        if Date().timeIntervalSince(current.startedAt) < current.blipWindow {
             events.remove(id: eventID)
             center.removeDeliveredNotifications(withIdentifiers: ids)
-        } else if !cancelled {
+        } else {
+            // Back in range, or no longer watched (switched off, forgotten, Bluetooth off): either
+            // way the episode is over, so History never shows it as open forever.
             event.resolvedAt = Date()
             events.upsert(event)
-            center.removeDeliveredNotifications(withIdentifiers: ids)
+            link.lastEndedAt = Date()
+            if !cancelled {
+                center.removeDeliveredNotifications(withIdentifiers: ids)
+            }
         }
     }
 
@@ -815,15 +854,17 @@ final class DiTagManager: NSObject, ObservableObject {
     // MARK: - Button
 
     private func buttonPressed(_ link: Link) {
-        // Any press answers: stops the iPhone ringing, or this DiTAG's own beep.
-        if ringer.isRinging && ringer.reason == .tag {
+        // Any press answers: stops the iPhone ringing (whatever started it), or this DiTAG's beep.
+        if ringer.isRinging {
             ringer.stop()
+            stopFollowUps()
             link.pressCount = 0
             link.pressTask?.cancel()
             return
         }
         if status(link.id).isBeeping {
             stopBeep(link.id)
+            return
         }
         link.pressCount += 1
         link.pressTask?.cancel()
@@ -842,6 +883,7 @@ final class DiTagManager: NSObject, ObservableObject {
 
     private func beginSetupScan() {
         guard setupPhase == .scanning, let central else { return }
+        setupTask?.cancel()
         central.scanForPeripherals(withServices: [DiTagUUID.buttonService],
                                    options: [CBCentralManagerScanOptionAllowDuplicatesKey: true])
         setupTask = Task { [weak self] in
@@ -852,6 +894,7 @@ final class DiTagManager: NSObject, ObservableObject {
     }
 
     private func pickCandidate() {
+        guard setupPhase == .scanning else { return }
         central?.stopScan()
         guard let best = candidates.values.max(by: { $0.rssi < $1.rssi })?.peripheral, let central else {
             failSetup(message: "No new DiTAG found. Turn it on (hold its button until it beeps twice) and close other finder apps.")
@@ -948,32 +991,43 @@ final class DiTagManager: NSObject, ObservableObject {
             bluetooth = .ok
             if setupPhase == .scanning { beginSetupScan() }
             for link in links.values { connect(link) }
-        case .unknown, .resetting:
+        case .unknown:
             break
+        case .resetting:
+            // The Bluetooth system restarts: every peripheral object is stale now.
+            resetLinks()
         default:
-            bluetooth = managerState == .unauthorized ? .unauthorized : .off
             if setupPhase != nil {
                 failSetup(message: managerState == .unauthorized ? nil : "Turn on Bluetooth to add a DiTAG.")
             }
+            bluetooth = managerState == .unauthorized ? .unauthorized : .off
             // Bluetooth turned off: you did that, so nothing is "left behind".
             if !links.isEmpty {
                 log(nil, managerState == .unauthorized ? "Bluetooth not allowed" : "Bluetooth turned off: no alerts")
             }
-            for link in links.values {
-                silencePendingAlert(link.id)
-                endEpisode(link, cancelled: true)
-                stopBeepState(link)
-                clearFarWarning(link)
-                link.launchCheckTask?.cancel()
-                link.peripheral = nil   // fetched again when Bluetooth is back on
-                link.alertCharacteristic = nil
-                update(link.id) {
-                    $0.state = .connecting
-                    $0.signal = nil
-                }
-            }
-            stopSignalReading()
+            resetLinks()
         }
+    }
+
+    /// Forgets every live connection detail; they are fetched again once Bluetooth is on.
+    private func resetLinks() {
+        for link in links.values {
+            silencePendingAlert(link.id)
+            endEpisode(link, cancelled: true)
+            stopBeepState(link)
+            clearFarWarning(link)
+            link.launchCheckTask?.cancel()
+            // Check again once Bluetooth is back: a DiTAG left behind meanwhile sends no
+            // disconnect, so this is the only way to notice it.
+            link.launchChecked = false
+            link.peripheral = nil
+            link.alertCharacteristic = nil
+            update(link.id) {
+                $0.state = .connecting
+                $0.signal = nil
+            }
+        }
+        stopSignalReading()
     }
 
     fileprivate func handleRestore(_ restored: [CBPeripheral]) {

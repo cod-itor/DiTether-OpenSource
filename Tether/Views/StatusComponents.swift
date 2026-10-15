@@ -114,18 +114,12 @@ struct PulsingShield: View {
     let color: Color
     var isLive: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var ripple = false
 
     var body: some View {
         ZStack {
             if isLive && !reduceMotion {
                 ForEach(0..<2, id: \.self) { ring in
-                    Circle()
-                        .stroke(color.opacity(0.35), lineWidth: 2)
-                        .scaleEffect(ripple ? 1.55 : 0.9)
-                        .opacity(ripple ? 0 : 0.9)
-                        .animation(.easeOut(duration: 2.4).repeatForever(autoreverses: false)
-                            .delay(Double(ring) * 1.2), value: ripple)
+                    RippleCircle(color: color.opacity(0.35), delay: Double(ring) * 1.2)
                 }
             }
             Circle()
@@ -140,7 +134,7 @@ struct PulsingShield: View {
                 .contentTransition(.symbolEffect(.replace))
         }
         .frame(width: 108, height: 108)
-        .onAppear { ripple = true }
+        .accessibilityHidden(true)
     }
 }
 

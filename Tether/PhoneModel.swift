@@ -26,7 +26,7 @@ final class PhoneModel: ObservableObject {
     @Published private(set) var ringWatchState: RingWatchState = .idle
     private var ringWatchResetTask: Task<Void, Never>?
 
-    /// The latest report from the watch. Kept on disk so the status screen is right straight after launch.
+    /// The latest report from the watch. Kept on disk so the Home screen is right straight after launch.
     @Published private(set) var watchStatus: WatchStatus?
     private let watchStatusFile = JSONFile<WatchStatus>(name: "watch-status.json")
 
@@ -107,8 +107,11 @@ final class PhoneModel: ObservableObject {
         // Share the iPhone's position with the watch only as a fallback: protection on, and the watch
         // has said its own Bluetooth link is NOT working (or Bluetooth range is turned off). Never just
         // because the watch has not reported yet, so launching DiTether does not start location.
+        // A report older than a day (watch removed, unpaired or long gone) no longer counts.
         settings.$settings.map { ($0.protectionEnabled, $0.detectionMode, $0.bluetoothRangeEnabled) }
-            .combineLatest(location.$status, $watchStatus.map { $0?.bluetoothLinked })
+            .combineLatest(location.$status, $watchStatus.map { status in
+                status.flatMap { Date().timeIntervalSince($0.sentAt) < 24 * 3600 ? $0.bluetoothLinked : nil }
+            })
             .sink { [weak self] values, status, bluetoothLinked in
                 let (protecting, mode, bluetoothRange) = values
                 let needsFallback = !bluetoothRange || bluetoothLinked == false
