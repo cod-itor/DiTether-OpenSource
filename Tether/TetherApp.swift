@@ -32,7 +32,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         }
     }
 
-    /// "Left it on purpose" on the DiTAG alert (on the iPhone or the watch): quiet until it is back.
+    /// Notification buttons, from the iPhone or the watch: "Left it on purpose" (quiet until the
+    /// DiTAG is back), "Reconnect now" (Quiet mode ended), "Silence DiTAGs" (quiet hours) and
+    /// "Found it" (stop ringing).
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
                                             didReceive response: UNNotificationResponse,
                                             withCompletionHandler completionHandler: @escaping () -> Void) {
@@ -40,8 +42,20 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         let tagID = (response.notification.request.content.userInfo[DiTagManager.tagIDKey] as? String)
             .flatMap(UUID.init(uuidString:))
         Task { @MainActor in
-            if action == DiTagManager.leaveItAction, let tagID {
-                self.model.diTag.snoozeUntilBack(tagID)
+            let diTag = self.model.diTag
+            switch action {
+            case DiTagManager.leaveItAction:
+                if let tagID { diTag.snoozeUntilBack(tagID) }
+            case DiTagManager.reconnectAction:
+                diTag.refreshQuiet()
+                if let tagID, diTag.settings.tag(tagID)?.isQuiet() == true { diTag.endQuiet([tagID]) }
+            case DiTagManager.silenceTagsAction:
+                diTag.quietForQuietHours()
+            case PhoneRinger.foundItAction:
+                self.model.ringer.stop()
+                diTag.stopFollowUps()
+            default:
+                break
             }
             completionHandler()
         }

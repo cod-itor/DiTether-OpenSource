@@ -8,6 +8,8 @@ struct WatchTagInfo: Codable, Identifiable, Equatable {
         case leftBehind
         case connecting
         case off
+        /// Quiet mode: disconnected on purpose for a while.
+        case quiet
     }
 
     var id: UUID

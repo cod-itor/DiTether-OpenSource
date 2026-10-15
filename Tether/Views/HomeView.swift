@@ -36,6 +36,16 @@ struct HomeView: View {
                 SectionTitle("With you")
                 deviceStrip
 
+                ForEach(lostTags) { tag in
+                    NavigationLink {
+                        PlacesView()
+                    } label: {
+                        LastSeenCard(tag: tag, status: model.diTag.status(tag.id),
+                                     place: model.places.latest(.lost, tagName: tag.displayName))
+                    }
+                    .buttonStyle(TileButtonStyle())
+                }
+
                 SectionTitle("Quick actions")
                 quickActions
 
@@ -194,6 +204,20 @@ struct HomeView: View {
                                       subtitle: placesSubtitle, color: Theme.brand)
                 }
                 .buttonStyle(TileButtonStyle())
+
+                ActionTile(symbol: "camera.fill", title: "Camera",
+                           subtitle: tags.isEmpty ? "Full quality" : "Shoot with a DiTAG",
+                           color: .pink) {
+                    model.showCamera = true
+                }
+
+                NavigationLink {
+                    PlacesView()
+                } label: {
+                    ActionTileContent(symbol: "map.fill", title: "Places",
+                                      subtitle: mapSubtitle, color: .teal)
+                }
+                .buttonStyle(TileButtonStyle())
             }
             if let feedback = testFeedback {
                 feedback
@@ -223,6 +247,15 @@ struct HomeView: View {
         guard model.testAlertState == .failed else { return nil }
         return Text("Make sure your watch is nearby and unlocked, open DiTether on it, then try again.")
             .foregroundColor(.orange)
+    }
+
+    private var lostTags: [DiTag] {
+        tags.filter { model.diTag.status($0.id).state == .lost }
+    }
+
+    private var mapSubtitle: String {
+        guard let latest = model.places.places.first else { return "Saved spots" }
+        return latest.kind == .marked ? "Last spot saved" : "\(latest.tagName ?? "DiTAG") last seen"
     }
 
     private var placesSubtitle: String {
@@ -311,5 +344,43 @@ struct DeviceChip: View {
             }
         }
         .shadow(color: .black.opacity(scheme == .dark ? 0 : 0.05), radius: 10, y: 4)
+    }
+}
+
+/// A DiTAG that's out of range right now, and where it was left.
+private struct LastSeenCard: View {
+    let tag: DiTag
+    let status: DiTagManager.TagStatus
+    let place: SavedPlace?
+
+    var body: some View {
+        HStack(spacing: 14) {
+            IconBadge(symbol: "exclamationmark.triangle.fill", color: .orange, size: 44, filled: true)
+            VStack(alignment: .leading, spacing: 3) {
+                Text("\(tag.displayName) left behind")
+                    .font(.headline)
+                    .foregroundStyle(.primary)
+                if let lostAt = status.lostAt {
+                    Text("Last seen \(lostAt, style: .relative) ago")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+                if let address = place?.address {
+                    Label(address, systemImage: "mappin.and.ellipse")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+            Spacer(minLength: 0)
+            Image(systemName: "chevron.right")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(.tertiary)
+        }
+        .card(padding: 14)
+        .overlay {
+            RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous)
+                .strokeBorder(Color.orange.opacity(0.4), lineWidth: 1.5)
+        }
     }
 }

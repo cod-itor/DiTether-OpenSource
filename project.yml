@@ -50,6 +50,8 @@ targets:
         NSHealthShareUsageDescription: DiTether uses Workout access only to open DiTether on your Apple Watch from this iPhone. Nothing is read or saved to Health.
         NSHealthUpdateUsageDescription: DiTether uses Workout access only to open DiTether on your Apple Watch from this iPhone. Nothing is read or saved to Health.
         NSBluetoothAlwaysUsageDescription: Your Apple Watch connects to this iPhone over Bluetooth to feel how close it is, so it can warn you the moment you walk away from it. DiTether also connects to your DiTAG to tell you when your keys or bag are left behind.
+        NSCameraUsageDescription: DiTether's camera lets you take photos with a press on your DiTAG, like a remote shutter.
+        NSPhotoLibraryAddUsageDescription: DiTether saves the photos you take with its camera to your library.
         UIBackgroundModes:
           - location
           - bluetooth-peripheral

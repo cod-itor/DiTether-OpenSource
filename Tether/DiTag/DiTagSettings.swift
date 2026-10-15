@@ -17,6 +17,9 @@ struct DiTag: Codable, Equatable, Identifiable {
     var lastLeftAt: Date?
     /// The low-battery notification was shown; cleared when a new battery shows a high level.
     var lowBatteryWarned = false
+    /// Quiet mode: politely disconnected until then (`.distantFuture` = until turned off), so
+    /// leaving it somewhere on purpose makes no noise on the iPhone.
+    var quietUntil: Date?
 
     init(id: UUID, name: String) {
         self.id = id
@@ -35,6 +38,13 @@ struct DiTag: Codable, Equatable, Identifiable {
         return false
     }
 
+    func isQuiet(at date: Date = Date()) -> Bool {
+        quietUntil.map { $0 > date } ?? false
+    }
+
+    /// Quiet mode with no end time.
+    var isQuietUntilTurnedOff: Bool { quietUntil == .distantFuture }
+
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(UUID.self, forKey: .id)
@@ -45,6 +55,7 @@ struct DiTag: Codable, Equatable, Identifiable {
         lastLeftFix = try? c.decodeIfPresent(GeoFix.self, forKey: .lastLeftFix)
         lastLeftAt = try? c.decodeIfPresent(Date.self, forKey: .lastLeftAt)
         lowBatteryWarned = (try? c.decodeIfPresent(Bool.self, forKey: .lowBatteryWarned)) ?? false
+        quietUntil = try? c.decodeIfPresent(Date.self, forKey: .quietUntil)
     }
 }
 
@@ -59,6 +70,16 @@ struct DiTagSettings: Codable, Equatable {
     var earlyWarning = true
     /// Left behind: play the loud alarm (full volume, also on silent) as well as vibrating.
     var alarmSound = false
+    /// A single press (camera closed) saves the spot you're at ("I parked here").
+    var singlePressSavesSpot = true
+    /// How long to wait for a second press, in seconds.
+    var doublePressWindow = 0.5
+    /// At the start of quiet hours, offer to put every DiTAG in Quiet mode until they end.
+    var quietHoursPrompt = false
+    /// Result of the "disconnect politely" test: nil = not tested, true = the DiTAG stayed silent.
+    var politeDisconnectSilent: Bool?
+
+    static let doublePressRange = 0.3...0.8
 
     /// iOS keeps only a handful of Bluetooth connections at once (the watch uses one as well).
     static let maxTags = 8
@@ -82,6 +103,8 @@ struct DiTagSettings: Codable, Equatable {
 
     var sanitized: DiTagSettings {
         var copy = self
+        copy.doublePressWindow = min(max(doublePressWindow, Self.doublePressRange.lowerBound),
+                                     Self.doublePressRange.upperBound)
         for index in copy.tags.indices {
             copy.tags[index].name = String(copy.tags[index].name.prefix(30))
         }
@@ -91,7 +114,8 @@ struct DiTagSettings: Codable, Equatable {
     init() {}
 
     private enum CodingKeys: String, CodingKey {
-        case tags, ringOnDoublePress, saveLocation, earlyWarning, alarmSound
+        case tags, ringOnDoublePress, saveLocation, earlyWarning, alarmSound, singlePressSavesSpot
+        case doublePressWindow, quietHoursPrompt, politeDisconnectSilent
         // From the first, single-DiTAG version; read once and moved into `tags`.
         case savedPeripheralID, name, isEnabled, snoozedUntil, snoozedUntilBack
     }
@@ -108,6 +132,10 @@ struct DiTagSettings: Codable, Equatable {
         read(.saveLocation, &saveLocation)
         read(.earlyWarning, &earlyWarning)
         read(.alarmSound, &alarmSound)
+        read(.singlePressSavesSpot, &singlePressSavesSpot)
+        read(.doublePressWindow, &doublePressWindow)
+        read(.quietHoursPrompt, &quietHoursPrompt)
+        politeDisconnectSilent = try? c.decodeIfPresent(Bool.self, forKey: .politeDisconnectSilent)
         if tags.isEmpty, let legacyID = try? c.decodeIfPresent(UUID.self, forKey: .savedPeripheralID) {
             var tag = DiTag(id: legacyID, name: (try? c.decodeIfPresent(String.self, forKey: .name)) ?? "Keys")
             read(.isEnabled, &tag.isEnabled)
@@ -124,6 +152,10 @@ struct DiTagSettings: Codable, Equatable {
         try c.encode(saveLocation, forKey: .saveLocation)
         try c.encode(earlyWarning, forKey: .earlyWarning)
         try c.encode(alarmSound, forKey: .alarmSound)
+        try c.encode(singlePressSavesSpot, forKey: .singlePressSavesSpot)
+        try c.encode(doublePressWindow, forKey: .doublePressWindow)
+        try c.encode(quietHoursPrompt, forKey: .quietHoursPrompt)
+        try c.encodeIfPresent(politeDisconnectSilent, forKey: .politeDisconnectSilent)
     }
 }
 

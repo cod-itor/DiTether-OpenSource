@@ -63,13 +63,40 @@ Cheap Bluetooth key finders (sold as "iTAG") on your keys, bag or wallet. Add up
 - **Left-behind alert:** the moment a DiTAG's Bluetooth link drops, the iPhone vibrates hard (or, if you pick **Sound + vibrate**, also plays the loud alarm at full volume, even on silent) for up to 30 s and shows "Keys left behind", repeated by iOS every 5 s so it buzzes even if DiTether is paused. With the iPhone locked, the notifications also reach your watch, the normal iOS way. If it reconnects within 5 s, the alert stops and leaves no History entry.
 - **"Left it on purpose"** right on the notification, and **Snooze**: until it's back in range, or 30 min / 1 h / 3 h / 8 h. Quiet hours and safe places apply too. The watch snooze does not silence your keys.
 - **Play sound on DiTAG,** with a Near / Medium / Far signal reading while the DiTAG tab is open.
-- **Double-press the DiTAG button** to ring the iPhone at full volume, even on silent. Any press stops it.
+- **The DiTAG button:**
+  - **Press once:** saves your spot ("I parked here") on the Places map.
+  - **Press twice:** rings the iPhone at full volume, even on silent. The double-press window is adjustable (0.3–0.8 s).
+  - **Any press while the iPhone rings:** stops it.
+  - **With the Camera tab open:** every press takes a photo instead.
+- **Quiet mode:** politely disconnects a DiTAG for 1 h, 3 h, until 7:00 tomorrow, or until you end it, so leaving it in a locker makes no noise on the iPhone. A "Reconnect now" notification arrives when it ends. A built-in test ("disconnect politely") checks whether your DiTAG also stays silent. Quiet hours can offer "Silence DiTAGs" when they start.
 - **Early warning:** one tap and a "Keys getting far" notification when the signal gets weak, before the disconnect alert. Works while DiTether is open or awake; iOS pauses it in the background.
-- **Where it was left:** a map on the tag's screen while it's out of range, with "Left here 12 min ago" and Open in Maps.
+- **Where it was left:** a map on the tag's screen while it's out of range, with "Left here 12 min ago" and Open in Maps, plus a "left behind" card on Home.
+- **Places:** a map and list of where DiTAGs were left (orange) and spots you saved (blue), with street names, swipe for walking directions, swipe to delete. The last 100 stay on the iPhone.
+- **Test and diagnostics** per DiTAG: the Quiet mode test, and the read-only values of FFE3, FFE6 and FFE7 (DiTether never writes to them).
 - **Battery level,** plus one "battery low" notification at 15% (a dead DiTAG looks just like a lost one).
 - **On the watch:** a DiTAGs screen listing each one (with you / left behind, battery). Tap one to make it beep.
 - **History** entries with a tag icon and where it was left.
 - **A switch per DiTAG.** Off means no Bluetooth connection and nothing running for it. With none on (or none set up), DiTAG uses no Bluetooth at all.
+
+### Camera: a DiTAG as a remote shutter
+
+A **Camera** tab with Apple's full-quality photo pipeline. iOS doesn't let another app press the shutter of Apple's Camera app, so DiTether has its own.
+
+- **Shutter:** press any DiTAG, tap the big button, or press a volume button (iOS 17.2+). With the camera open a double press takes one photo and doesn't ring the phone.
+- **Full quality:** HEIF, up to 48 MP on cameras that offer it (iPhone 15 Pro's main lens), 24 MP by default, 12 MP to save space.
+- **Zoom chips** 0.5× · 1× · 2× · 5× (or 3×) that land on the right lens, plus pinch to zoom.
+- **Front / back, flash** (off / auto / on), **self-timer** (off / 3 s / 10 s, also for DiTAG presses), and **1, 3 or 5 photos per press**.
+- Photos are saved straight to your library; the thumbnail opens Photos.
+- The camera only runs while the tab is showing.
+- Night mode, Portrait and Cinematic stay in Apple's Camera app.
+
+### Shortcuts and Siri
+
+Actions in the Shortcuts app, most of which run without opening DiTether: **Open DiTAG Camera**, **Start Quiet Mode** (one DiTAG or all, optional minutes), **End Quiet Mode**, **Ring DiTAG** (5 s), **Save My Spot**. Ideas (also in Devices → DiTAG options → Shortcuts and Siri):
+
+- **Action button:** Settings → Action Button → Shortcut → DiTether → Open DiTAG Camera.
+- **Quiet at work:** Shortcuts → Automation → New → Arrive → Work → Start Quiet Mode → Run Immediately.
+- **Quiet every night:** Shortcuts → Automation → New → Time of Day → 23:00 → Start Quiet Mode, 480 minutes → Run Immediately.
 
 ### Staying quiet when it's fine
 
@@ -86,7 +113,8 @@ Cheap Bluetooth key finders (sold as "iTAG") on your keys, bag or wallet. Add up
   - "Open DiTether on your watch" launches the watch app from the iPhone.
   - Permission steps show the permission prompt, or open the Settings app if it was denied.
 - **Intro on the watch** that explains each permission before the system asks for it.
-- **Status screen with one clear answer:** "You're protected", "Install DiTether on your watch", "Your watch needs attention", and so on. Each comes with a button to fix it.
+- **Five tabs:** Home, Devices, Camera, History, Settings. Light, dark or system appearance.
+- **Home with one clear answer:** "You're protected", "Install DiTether on your watch", "Your watch needs attention", and so on. Each comes with a button to fix it.
 - **Test alerts** sent from the iPhone, or previewed on the watch.
 - **Watch face complication:** Nearby / Apart / Left? / Quiet / Off, in circular, corner, rectangular and inline sizes.
 - **Connection log on the watch:** what the watch noticed and why, useful after a walk test.
@@ -217,6 +245,9 @@ flowchart TD
 
 **Built and compile-checked, awaiting device test:**
 - Everything DiTAG (setup, beep, battery, double-press ring, left-behind alert and vibration, snooze).
+- The Camera tab (48/24 MP HEIF, zoom chips per lens, timer, burst, DiTAG and volume-button shutter).
+- Quiet mode, the polite-disconnect test, the quiet-hours offer, saved spots and Places.
+- The Shortcuts actions.
 - Ring iPhone / Ring my watch.
 - The hot/cold finder and the turn-back taps.
 - Vibration styles.
@@ -240,7 +271,10 @@ The watch's **Connection log** (watch Settings → Connection log) records each 
 6. **Thresholds may need tuning for your devices.** The −84 dBm "weak" threshold is a starting point. The Connection log shows the dBm values to tune from.
 7. **Only the watch-alerts-for-phone direction is built.** An iPhone alert for a forgotten watch is not.
 8. **DiTAG alerts need DiTether in the background.** iOS keeps the DiTAG connection and wakes DiTether for it while it's in the background, but a swiped-away app is not woken for Bluetooth. You get a "DiTAG paused" notification when that happens. If watch protection is on, the watch's next ping relaunches DiTether, which reconnects and alerts if the DiTAG is no longer in range. Range is about 25 m in the open, less through bags and walls.
-9. **The App Store would likely reject this design.** Apple's review guidelines only allow workout sessions for real workouts. This build is meant for personal installs from Xcode.
+9. **Saving a spot from the background needs "Always" location.** With "While using" only, a press while DiTether is in the background can't get a position (you'll see "Couldn't save the spot"). Devices → DiTAG options has an "Allow location: Always" button.
+10. **Quiet mode can't stop the DiTAG's own beep** if its firmware beeps on any disconnect. Run the polite-disconnect test; if it beeps, hold its button 5 s to switch it off instead.
+11. **Quiet mode ends on time only while DiTether can run.** If DiTether is suspended, iOS shows "Quiet mode ended" at the right time and "Reconnect now" reconnects; opening DiTether also does.
+12. **The App Store would likely reject this design.** Apple's review guidelines only allow workout sessions for real workouts. This build is meant for personal installs from Xcode.
 
 ---
 
@@ -274,8 +308,11 @@ Tether/              iPhone app
   PhoneRinger          "Ring iPhone" sound and the left-behind vibration
   WatchLauncher        Opens the watch app or the Watch app
   SetupState           Status card and setup checklist logic
-  DiTag/               DiTAG key finder: Bluetooth IDs, settings, DiTagManager
-  Views/               Intro, Status, History, DiTAG, Settings, Safe places, Alert timing
+  DiTag/               DiTAG key finder: Bluetooth IDs, settings, DiTagManager (alerts, quiet mode, button routing)
+  Camera/              CameraManager: full-quality capture on a private queue
+  Places/              PlacesStore: lost and saved spots, street names
+  Intents/             Shortcuts and Siri actions
+  Views/               Home, Devices, Camera, History, Settings, DiTAG screens, setup guide, Places
 
 project.yml          XcodeGen spec
 Config/              Personal signing settings

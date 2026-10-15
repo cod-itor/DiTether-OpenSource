@@ -9,7 +9,7 @@ struct RootView: View {
     static let onboardedKey = "tether.onboarded"
 
     enum Tab: Hashable {
-        case home, devices, history, settings
+        case home, devices, camera, history, settings
     }
 
     var body: some View {
@@ -21,6 +21,10 @@ struct RootView: View {
                 .tabItem { Label("Devices", systemImage: "dot.radiowaves.left.and.right") }
                 .tag(Tab.devices)
                 .badge(model.diTag.statuses.values.filter { $0.state == .lost }.count)
+            // Its own tab: the camera only runs while this tab is showing.
+            CameraView()
+                .tabItem { Label("Camera", systemImage: "camera.fill") }
+                .tag(Tab.camera)
             HistoryView()
                 .tabItem { Label("History", systemImage: "clock.arrow.circlepath") }
                 .tag(Tab.history)
@@ -29,6 +33,18 @@ struct RootView: View {
                 .tag(Tab.settings)
         }
         .tint(Theme.brand)
+        // "Open camera" from Home, Devices, Settings or the "Open DiTAG Camera" shortcut.
+        .onChange(of: model.showCamera) { _, show in
+            guard show else { return }
+            tab = .camera
+            model.showCamera = false
+        }
+        .onAppear {
+            if model.showCamera {
+                tab = .camera
+                model.showCamera = false
+            }
+        }
         .onAppear { AppAppearance.apply(appearance) }
         .onChange(of: appearance) { _, newValue in AppAppearance.apply(newValue) }
         // Ringing (or the left-behind vibration) while DiTether is open: one tap stops it.

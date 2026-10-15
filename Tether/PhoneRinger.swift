@@ -41,6 +41,9 @@ final class PhoneRinger: ObservableObject {
     /// Hidden system volume control used to raise the volume. Kept off screen.
     private lazy var volumeView = MPVolumeView(frame: CGRect(x: -2000, y: -2000, width: 1, height: 1))
     private let notificationID = "ditether.ringPhone"
+    /// The "Here's your iPhone" notification has a Found it button that stops the ringing.
+    nonisolated static let category = "ditether.ring"
+    nonisolated static let foundItAction = "ditether.foundIt"
     private static let ringDuration: UInt64 = 30
 
     /// True if the sound started.
@@ -143,6 +146,7 @@ final class PhoneRinger: ObservableObject {
         content.body = body
         content.sound = .default
         content.interruptionLevel = .timeSensitive
+        content.categoryIdentifier = Self.category
         UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: notificationID,
                                                                      content: content, trigger: nil))
     }

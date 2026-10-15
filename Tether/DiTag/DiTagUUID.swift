@@ -16,4 +16,8 @@ enum DiTagUUID {
     static let buttonPress = CBUUID(string: "FFE1")
 
     static let services = [immediateAlertService, batteryService, buttonService]
+
+    /// Read-only, for the diagnostics screen: unknown values the owner may want to compare.
+    /// They are only ever read, never written.
+    static let readOnlyUnknowns = [CBUUID(string: "FFE3"), CBUUID(string: "FFE6"), CBUUID(string: "FFE7")]
 }

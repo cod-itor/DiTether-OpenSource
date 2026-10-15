@@ -1,6 +1,7 @@
 import AudioToolbox
 import CoreBluetooth
 import SwiftUI
+import UIKit
 import UserNotifications
 
 /// Everything the iPhone does with its DiTAGs (one or several): set up, stay connected, beep,
@@ -23,6 +24,8 @@ final class DiTagManager: NSObject, ObservableObject {
         case connected
         /// Out of range: iOS keeps trying and reconnects by itself when it is back.
         case lost
+        /// Quiet mode: politely disconnected on purpose, nothing runs for it until it ends.
+        case quiet
     }
 
     enum BluetoothStatus: Equatable {
@@ -91,9 +94,20 @@ final class DiTagManager: NSObject, ObservableObject {
     var settings: DiTagSettings { store.settings }
 
     func status(_ id: UUID) -> TagStatus {
-        if settings.tag(id)?.isEnabled == false { return TagStatus(state: .off) }
+        guard let tag = settings.tag(id) else { return statuses[id] ?? TagStatus() }
+        if !tag.isEnabled { return TagStatus(state: .off) }
+        if tag.isQuiet() { return TagStatus(state: .quiet) }
         return statuses[id] ?? TagStatus()
     }
+
+    /// Read-only values of FFE3, FFE6 and FFE7 per DiTAG, for the diagnostics screen.
+    @Published private(set) var diagnostics: [UUID: [String: String]] = [:]
+    /// The DiTAG whose "disconnect politely" test just ran, waiting for the owner's answer.
+    @Published private(set) var politeTestAwaitingAnswer: UUID?
+
+    /// Set by the app: whether the camera screen is open, and how to take a photo.
+    var isCameraOpen: (() -> Bool)?
+    var takePhoto: (() -> Void)?
 
     /// The DiTAGs whose left-behind alarm is going, for the in-app alert's title.
     var alarmTitle: String {
@@ -106,6 +120,7 @@ final class DiTagManager: NSObject, ObservableObject {
     private let events: EventStore
     private let location: PhoneLocation
     private let ringer: PhoneRinger
+    private let places: PlacesStore
 
     private var central: CBCentralManager?
 
@@ -125,6 +140,10 @@ final class DiTagManager: NSObject, ObservableObject {
         var farWarned = false
         /// When the last real (alerted) episode ended, to calm a DiTAG flickering at the edge of range.
         var lastEndedAt: Date?
+        /// The "disconnect politely" test is running: its disconnect is not a loss.
+        var politeTest = false
+        /// The last press that took a photo, so a quick second press doesn't take another.
+        var lastShutterPress: Date?
 
         init(id: UUID) { self.id = id }
 
@@ -142,6 +161,8 @@ final class DiTagManager: NSObject, ObservableObject {
         var startedAt: Date
         /// Back within this long = a blip: no trace in History.
         var blipWindow: TimeInterval = DiTagManager.blipWindow
+        /// The pin on the Places map for this episode.
+        var placeID: UUID?
     }
 
     /// Back within this long = a blip at the edge of range: the alert stops and leaves no History entry.
@@ -166,6 +187,8 @@ final class DiTagManager: NSObject, ObservableObject {
     // Button: one FFE1 notification per press, about 225 ms apart in a double press.
     private static let doublePressWindow: UInt64 = 500_000_000
 
+    /// Ends Quiet mode at the earliest end time while DiTether is running.
+    private var quietTimerTask: Task<Void, Never>?
     private var signalWanted: Set<UUID> = []
     private var signalTask: Task<Void, Never>?
     /// One position request shared by every DiTAG lost at the same moment (a bag with two tags).
@@ -194,7 +217,8 @@ final class DiTagManager: NSObject, ObservableObject {
     private static let withMeKey = "ditag.withMe"
 
     init(store: DiTagSettingsStore, tetherSettings: SettingsStore, events: EventStore,
-         location: PhoneLocation, ringer: PhoneRinger) {
+         location: PhoneLocation, ringer: PhoneRinger, places: PlacesStore) {
+        self.places = places
         self.store = store
         self.tetherSettings = tetherSettings
         self.events = events
@@ -209,9 +233,11 @@ final class DiTagManager: NSObject, ObservableObject {
             event.resolvedAt = Date()
             events.upsert(event)
         }
+        endExpiredQuiet(reconnect: false)
         // Created right away when a DiTAG is in use, because iOS expects the restored manager to be
         // recreated during launch when it relaunches DiTether for a Bluetooth event.
         reconcile()
+        scheduleQuietTimer()
     }
 
     // MARK: - Settings
@@ -259,6 +285,7 @@ final class DiTagManager: NSObject, ObservableObject {
             case .lost: state = .leftBehind
             case .connecting: state = .connecting
             case .off: state = .off
+            case .quiet: state = .quiet
             }
             return WatchTagInfo(id: tag.id, name: tag.displayName, state: state, battery: current.battery,
                                 isBeeping: current.isBeeping, since: current.lostAt)
@@ -389,7 +416,7 @@ final class DiTagManager: NSObject, ObservableObject {
     /// Matches the connections to the switches: connects every DiTAG that is on, drops the others,
     /// and releases Bluetooth completely when none is on (so iOS has nothing to wake DiTether for).
     private func reconcile() {
-        let wanted = Set(settings.tags.filter(\.isEnabled).map(\.id))
+        let wanted = Set(settings.tags.filter { $0.isEnabled && !$0.isQuiet() }.map(\.id))
         for (id, link) in links where !wanted.contains(id) {
             tearDown(link)
             links[id] = nil
@@ -586,15 +613,16 @@ final class DiTagManager: NSObject, ObservableObject {
         if settings.saveLocation && location.isAuthorized {
             requestFreshFix(for: link)
         }
+        let placeID = fix.map { places.add(.lost, fix: $0, tagName: tag.displayName) }
 
         if let reason = quietReason(for: tag, fix: fix) {
             log(link.id, "No alert: \(reason)")
-            link.episode = LostEpisode(eventID: nil, startedAt: lostAt)
+            link.episode = LostEpisode(eventID: nil, startedAt: lostAt, placeID: placeID)
             return
         }
 
         let flickering = link.lastEndedAt.map { lostAt.timeIntervalSince($0) < Self.flickerWindow } ?? false
-        var episode = LostEpisode(eventID: nil, startedAt: lostAt)
+        var episode = LostEpisode(eventID: nil, startedAt: lostAt, placeID: placeID)
         if flickering {
             // Just came back and dropped again: alert in 10 s unless it is back by then. Scheduled
             // notifications still fire if iOS suspends DiTether, and each one buzzes.
@@ -645,14 +673,20 @@ final class DiTagManager: NSObject, ObservableObject {
     /// A fresh position: remember it as where the DiTAG was left, store it with the event, and stop
     /// the alert after all if it turns out to be in a safe place (left at home is fine).
     private func adoptFreshFix(_ fix: GeoFix?, link: Link) {
-        guard let fix, let episode = link.episode, settings.tag(link.id) != nil else { return }
+        guard let fix, let episode = link.episode, let tag = settings.tag(link.id) else { return }
         store.editTag(link.id) { $0.lastLeftFix = fix }
+        if let placeID = episode.placeID {
+            places.update(placeID, fix: fix)
+        } else {
+            link.episode?.placeID = places.add(.lost, fix: fix, tagName: tag.displayName)
+        }
         guard let eventID = episode.eventID,
               var event = events.events.first(where: { $0.id == eventID }) else { return }
         // Only a safe place can stop it now; a snooze tapped meanwhile keeps the History entry.
         let shared = tetherSettings.settings
         if shared.muteInSafePlaces, let place = Suppression.safePlace(for: fix, in: shared.safePlaces) {
             log(link.id, "Alert stopped: at \(place.name)")
+            if let placeID = link.episode?.placeID { places.remove(placeID) }
             silencePendingAlert(link.id)
             UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: Self.alertIDs(link.id))
             events.remove(id: eventID)
@@ -844,11 +878,20 @@ final class DiTagManager: NSObject, ObservableObject {
         UserDefaults.standard.set(ids.map(\.uuidString), forKey: Self.withMeKey)
     }
 
+    /// Every notification button DiTether uses, registered together (iOS keeps one set per app).
+    /// None has the foreground option, so they work from the lock screen and the watch.
     private func registerNotificationActions() {
-        let leaveIt = UNNotificationAction(identifier: Self.leaveItAction, title: "Left it on purpose", options: [])
-        let category = UNNotificationCategory(identifier: Self.alertCategory, actions: [leaveIt],
-                                              intentIdentifiers: [], options: [])
-        UNUserNotificationCenter.current().setNotificationCategories([category])
+        func category(_ id: String, _ action: String, _ title: String) -> UNNotificationCategory {
+            UNNotificationCategory(identifier: id,
+                                   actions: [UNNotificationAction(identifier: action, title: title, options: [])],
+                                   intentIdentifiers: [], options: [])
+        }
+        UNUserNotificationCenter.current().setNotificationCategories([
+            category(Self.alertCategory, Self.leaveItAction, "Left it on purpose"),
+            category(Self.quietEndedCategory, Self.reconnectAction, "Reconnect now"),
+            category(Self.quietHoursCategory, Self.silenceTagsAction, "Silence DiTAGs"),
+            category(PhoneRinger.category, PhoneRinger.foundItAction, "Found it"),
+        ])
     }
 
     // MARK: - Button
@@ -862,21 +905,83 @@ final class DiTagManager: NSObject, ObservableObject {
             link.pressTask?.cancel()
             return
         }
+        // Camera open: every press is the shutter, right away (no waiting for a second press).
+        // A second press within 0.6 s is ignored, so a double press takes one photo, not two.
+        if isCameraOpen?() == true {
+            let now = Date()
+            if let last = link.lastShutterPress, now.timeIntervalSince(last) < 0.6 { return }
+            link.lastShutterPress = now
+            link.pressCount = 0
+            link.pressTask?.cancel()
+            takePhoto?()
+            return
+        }
         if status(link.id).isBeeping {
             stopBeep(link.id)
             return
         }
         link.pressCount += 1
         link.pressTask?.cancel()
+        let window = UInt64(settings.doublePressWindow * 1_000_000_000)
         link.pressTask = Task { [weak self, weak link] in
-            try? await Task.sleep(nanoseconds: Self.doublePressWindow)
+            try? await Task.sleep(nanoseconds: window)
             guard !Task.isCancelled, let self, let link else { return }
             let presses = link.pressCount
             link.pressCount = 0
-            if presses >= 2 && self.settings.ringOnDoublePress {
-                self.ringer.ring(.tag)
+            if presses >= 2 {
+                if self.settings.ringOnDoublePress {
+                    self.ringer.ring(.tag)
+                }
+            } else if self.settings.singlePressSavesSpot {
+                self.saveSpot(tagID: link.id)
             }
         }
+    }
+
+    // MARK: - Saved spots ("I parked here")
+
+    /// Saves where you are now, from a single press or a shortcut. Confirms with a haptic when
+    /// DiTether is open, or a quiet notification when it isn't.
+    func saveSpot(tagID: UUID? = nil) {
+        let name = tagID.flatMap { settings.tag($0)?.displayName }
+        guard location.isAuthorized else {
+            log(tagID, "Spot not saved: location is off for DiTether")
+            confirmSpot(saved: false, address: nil)
+            return
+        }
+        var placeID: UUID?
+        if let known = location.lastKnown, Date().timeIntervalSince(known.timestamp) < 60 {
+            placeID = places.add(.marked, fix: known, tagName: name)
+        }
+        beginBackgroundTime()
+        Task { [weak self] in
+            guard let self else { return }
+            let fresh = await self.location.current(timeout: 10)
+            if let fresh {
+                if let placeID {
+                    self.places.update(placeID, fix: fresh)
+                } else {
+                    placeID = self.places.add(.marked, fix: fresh, tagName: name)
+                }
+            }
+            self.log(tagID, placeID == nil ? "Spot not saved: no location" : "Spot saved")
+            self.confirmSpot(saved: placeID != nil, address: nil)
+            self.endBackgroundTime()
+        }
+    }
+
+    private func confirmSpot(saved: Bool, address: String?) {
+        if UIApplication.shared.applicationState == .active {
+            UINotificationFeedbackGenerator().notificationOccurred(saved ? .success : .error)
+            return
+        }
+        let content = UNMutableNotificationContent()
+        content.title = saved ? "Spot saved" : "Couldn't save the spot"
+        content.body = saved ? "It's on the Places map." : "Allow location for DiTether, then try again."
+        content.sound = .default
+        content.threadIdentifier = "ditag.spot"
+        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "ditag.spot",
+                                                                     content: content, trigger: nil))
     }
 
     // MARK: - Setup steps
@@ -1081,6 +1186,10 @@ final class DiTagManager: NSObject, ObservableObject {
         }
         guard let link = links[lost.identifier], let central else { return }
         link.alertCharacteristic = nil
+        if link.politeTest {
+            update(link.id) { $0.state = .connecting }
+            return
+        }
         log(link.id, "Out of range")
         // Ask again right away: iOS completes it whenever the DiTAG is back in range.
         central.connect(lost)
@@ -1119,6 +1228,11 @@ final class DiTagManager: NSObject, ObservableObject {
                 owner.setNotifyValue(true, for: characteristic)
             case DiTagUUID.buttonPress:
                 owner.setNotifyValue(true, for: characteristic)
+            case _ where DiTagUUID.readOnlyUnknowns.contains(characteristic.uuid):
+                // Diagnostics only: read, never written.
+                if characteristic.properties.contains(.read) {
+                    owner.readValue(for: characteristic)
+                }
             default:
                 break
             }
@@ -1140,6 +1254,9 @@ final class DiTagManager: NSObject, ObservableObject {
             } else if let link = links[id] {
                 buttonPressed(link)
             }
+        case _ where DiTagUUID.readOnlyUnknowns.contains(characteristic.uuid):
+            let hex = (characteristic.value ?? Data()).map { String(format: "%02X", $0) }.joined(separator: " ")
+            diagnostics[id, default: [:]][characteristic.uuid.uuidString] = hex.isEmpty ? "(empty)" : hex
         default:
             break
         }
@@ -1210,5 +1327,189 @@ extension DiTagManager: CBPeripheralDelegate {
         guard error == nil else { return }
         let rssi = RSSI.intValue
         MainActor.assumeIsolated { self.handleRSSI(peripheral, rssi) }
+    }
+}
+
+// MARK: - Quiet mode
+
+extension DiTagManager {
+    nonisolated static let quietEndedCategory = "ditag.quietEnded"
+    nonisolated static let reconnectAction = "ditag.reconnect"
+    nonisolated static let quietHoursCategory = "ditag.quietHours"
+    nonisolated static let silenceTagsAction = "ditag.silenceTags"
+    private static let quietHoursNotificationID = "ditag.quietHours"
+
+    private static func quietEndID(_ id: UUID) -> String { "ditag.quietEnd." + id.uuidString }
+
+    /// Politely disconnects these DiTAGs until `until` (nil = until turned off). Nothing alerts on
+    /// the iPhone meanwhile. Whether the DiTAG itself stays silent depends on its firmware: see
+    /// the "disconnect politely" test.
+    func startQuiet(_ ids: [UUID], until: Date?) {
+        let end = until ?? .distantFuture
+        for id in ids where settings.tag(id) != nil {
+            store.editTag(id) {
+                $0.quietUntil = end
+                $0.snoozedUntilBack = false
+            }
+            log(id, until.map { "Quiet mode on until \($0.formatted(date: .omitted, time: .shortened))" }
+                ?? "Quiet mode on until turned off")
+            scheduleQuietEnd(id, at: until)
+        }
+        reconcile()
+        scheduleQuietTimer()
+    }
+
+    /// Back to normal: reconnect and watch again.
+    func endQuiet(_ ids: [UUID]) {
+        let center = UNUserNotificationCenter.current()
+        for id in ids where settings.tag(id)?.quietUntil != nil {
+            store.editTag(id) { $0.quietUntil = nil }
+            center.removePendingNotificationRequests(withIdentifiers: [Self.quietEndID(id)])
+            log(id, "Quiet mode off: reconnecting")
+        }
+        reconcile()
+        scheduleQuietTimer()
+    }
+
+    /// Ends Quiet mode whose time has run out. Called at launch, when DiTether becomes active,
+    /// from the "Reconnect now" button, and by the timer while DiTether runs.
+    func refreshQuiet() {
+        endExpiredQuiet(reconnect: true)
+        scheduleQuietTimer()
+    }
+
+    func endExpiredQuiet(reconnect: Bool) {
+        var ended = false
+        for tag in settings.tags where tag.quietUntil != nil && !tag.isQuiet() {
+            store.editTag(tag.id) { $0.quietUntil = nil }
+            log(tag.id, "Quiet mode ended: reconnecting")
+            ended = true
+        }
+        if ended && reconnect { reconcile() }
+    }
+
+    private func scheduleQuietTimer() {
+        quietTimerTask?.cancel()
+        let now = Date()
+        guard let next = settings.tags.compactMap(\.quietUntil)
+            .filter({ $0 > now && $0 != .distantFuture }).min() else { return }
+        quietTimerTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(max(next.timeIntervalSinceNow, 0) * 1_000_000_000) + 500_000_000)
+            guard !Task.isCancelled else { return }
+            self?.refreshQuiet()
+        }
+    }
+
+    /// Timers stop while DiTether is suspended, so iOS delivers the end itself, with a button
+    /// that reconnects from the lock screen.
+    private func scheduleQuietEnd(_ id: UUID, at date: Date?) {
+        let center = UNUserNotificationCenter.current()
+        center.removePendingNotificationRequests(withIdentifiers: [Self.quietEndID(id)])
+        guard let date, let tag = settings.tag(id) else { return }
+        let content = UNMutableNotificationContent()
+        content.title = "Quiet mode ended"
+        content.body = "Tap Reconnect now so DiTether watches your \(tag.displayName) again."
+        content.sound = .default
+        content.categoryIdentifier = Self.quietEndedCategory
+        content.threadIdentifier = "ditag.quiet"
+        content.userInfo = [Self.tagIDKey: id.uuidString]
+        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: max(date.timeIntervalSinceNow, 1), repeats: false)
+        center.add(UNNotificationRequest(identifier: Self.quietEndID(id), content: content, trigger: trigger))
+    }
+
+    // MARK: Quiet hours
+
+    /// At the start of quiet hours, a notification offers "Silence DiTAGs" (Quiet mode until the
+    /// end). DiTether can't wake itself at an exact time, so the owner's tap does it.
+    func updateQuietHoursPrompt() {
+        let center = UNUserNotificationCenter.current()
+        center.removePendingNotificationRequests(withIdentifiers: [Self.quietHoursNotificationID])
+        let shared = tetherSettings.settings
+        guard settings.quietHoursPrompt, settings.hasTags, shared.quietHoursEnabled else { return }
+        let content = UNMutableNotificationContent()
+        content.title = "Quiet hours"
+        content.body = "Silence your DiTAGs until \(Self.timeText(shared.quietEndMinute))?"
+        content.categoryIdentifier = Self.quietHoursCategory
+        content.threadIdentifier = "ditag.quiet"
+        var start = DateComponents()
+        start.hour = shared.quietStartMinute / 60
+        start.minute = shared.quietStartMinute % 60
+        let trigger = UNCalendarNotificationTrigger(dateMatching: start, repeats: true)
+        center.add(UNNotificationRequest(identifier: Self.quietHoursNotificationID, content: content, trigger: trigger))
+    }
+
+    /// Every DiTAG that is on goes quiet until quiet hours end.
+    func quietForQuietHours() {
+        let endMinute = tetherSettings.settings.quietEndMinute
+        let calendar = Calendar.current
+        var parts = DateComponents()
+        parts.hour = endMinute / 60
+        parts.minute = endMinute % 60
+        let end = calendar.nextDate(after: Date(), matching: parts, matchingPolicy: .nextTime)
+        startQuiet(settings.tags.filter(\.isEnabled).map(\.id), until: end)
+    }
+
+    private static func timeText(_ minute: Int) -> String {
+        let date = Calendar.current.date(bySettingHour: minute / 60, minute: minute % 60, second: 0, of: Date()) ?? Date()
+        return date.formatted(date: .omitted, time: .shortened)
+    }
+
+    // MARK: Disconnect test
+
+    /// Disconnects on purpose for 8 s, then reconnects. The owner listens: if the DiTAG stays
+    /// silent, Quiet mode keeps it silent too.
+    func testPoliteDisconnect(_ id: UUID) {
+        guard let link = links[id], let peripheral = link.peripheral, peripheral.state == .connected,
+              let central else { return }
+        link.politeTest = true
+        politeTestAwaitingAnswer = id
+        log(id, "Test: disconnecting politely for 8 s")
+        central.cancelPeripheralConnection(peripheral)
+        Task { [weak self, weak link] in
+            try? await Task.sleep(nanoseconds: 8_000_000_000)
+            guard let self, let link, self.links[id] === link else { return }
+            link.politeTest = false
+            link.peripheral = nil
+            self.connect(link)
+        }
+    }
+
+    func answerPoliteTest(silent: Bool) {
+        edit { $0.politeDisconnectSilent = silent }
+        log(politeTestAwaitingAnswer, silent ? "Test result: stays silent when disconnected politely"
+                                             : "Test result: beeps even when disconnected politely")
+        politeTestAwaitingAnswer = nil
+    }
+
+    // MARK: Diagnostics
+
+    /// Reads FFE3, FFE6 and FFE7 (read only, never written).
+    func readDiagnostics(_ id: UUID) {
+        guard let peripheral = links[id]?.peripheral, peripheral.state == .connected,
+              let service = peripheral.services?.first(where: { $0.uuid == DiTagUUID.buttonService }) else { return }
+        peripheral.discoverCharacteristics(DiTagUUID.readOnlyUnknowns, for: service)
+    }
+
+    // MARK: Shortcuts
+
+    /// Waits up to `timeout` for these DiTAGs to connect (DiTether may have just been launched
+    /// in the background by a shortcut) and returns the ones that did.
+    func waitForConnection(_ ids: [UUID], timeout: TimeInterval = 5) async -> [UUID] {
+        let deadline = Date().addingTimeInterval(timeout)
+        while true {
+            let connected = ids.filter { status($0).state == .connected }
+            if connected.count == ids.count || Date() >= deadline { return connected }
+            try? await Task.sleep(nanoseconds: 250_000_000)
+        }
+    }
+
+    /// Beeps these DiTAGs for 5 s. Returns how many beeped.
+    func beepBriefly(_ ids: [UUID]) async -> Int {
+        let ready = await waitForConnection(ids)
+        for id in ready { beep(id) }
+        guard !ready.isEmpty else { return 0 }
+        try? await Task.sleep(nanoseconds: 5_000_000_000)
+        for id in ready { stopBeep(id) }
+        return ready.count
     }
 }

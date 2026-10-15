@@ -5,6 +5,7 @@ struct SettingsView: View {
     @State private var confirmClear = false
     @AppStorage(RootView.onboardedKey) private var hasOnboarded = false
     @State private var showTagGuide = false
+    @AppStorage(CameraManager.Keys.megapixels) private var cameraMegapixels = 24
 
     private var settings: TetherSettings { model.settings.settings }
 
@@ -87,7 +88,34 @@ struct SettingsView: View {
                         LabeledContent("DiTAG options",
                                        value: model.diTag.settings.alarmSound ? "Sound + vibrate" : "Vibrate")
                     }
+                    NavigationLink("Places") { PlacesView() }
+                    NavigationLink("Shortcuts and Siri") { ShortcutsHelpView() }
                     NavigationLink("Activity") { DiTagActivityView() }
+                }
+
+                Section {
+                    Picker("Photo size", selection: $cameraMegapixels) {
+                        Text("12 MP").tag(12)
+                        Text("24 MP").tag(24)
+                        Text("48 MP").tag(48)
+                    }
+                    Picker("Self-timer", selection: Binding(get: { model.camera.timerSeconds },
+                                                            set: { model.camera.timerSeconds = $0 })) {
+                        ForEach(CameraManager.timerChoices, id: \.self) { seconds in
+                            Text(seconds == 0 ? "Off" : "\(seconds) s").tag(seconds)
+                        }
+                    }
+                    Picker("Photos per press", selection: Binding(get: { model.camera.photosPerPress },
+                                                                  set: { model.camera.photosPerPress = $0 })) {
+                        ForEach(CameraManager.burstChoices, id: \.self) { count in
+                            Text("\(count)").tag(count)
+                        }
+                    }
+                    Button("Open camera") { model.showCamera = true }
+                } header: {
+                    Text("Camera")
+                } footer: {
+                    Text("Photos are saved as HEIF in full quality. 48 MP needs a camera that offers it, like the iPhone 15 Pro's main lens; otherwise the closest size is used. Night mode and Portrait are only in Apple's Camera app.")
                 }
 
                 Section("Help") {

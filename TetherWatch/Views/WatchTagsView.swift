@@ -102,6 +102,7 @@ private struct TagRow: View {
         case .leftBehind: return "exclamationmark.triangle.fill"
         case .connecting: return "tag"
         case .off: return "tag.slash"
+        case .quiet: return "moon.zzz.fill"
         }
     }
 
@@ -109,6 +110,7 @@ private struct TagRow: View {
         switch tag.state {
         case .withYou: return .green
         case .leftBehind: return .orange
+        case .quiet: return .indigo
         case .connecting, .off: return .secondary
         }
     }
@@ -119,6 +121,7 @@ private struct TagRow: View {
         case .leftBehind: return "Left behind"
         case .connecting: return "Connecting…"
         case .off: return "Off"
+        case .quiet: return "Quiet mode"
         }
     }
 }

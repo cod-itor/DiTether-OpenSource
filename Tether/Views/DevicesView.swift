@@ -50,6 +50,20 @@ struct DevicesView: View {
                             LinkRow(symbol: "list.bullet.rectangle", title: "Activity",
                                     subtitle: manager.activity.first?.text ?? "Nothing yet")
                         }
+                        Divider().padding(.leading, 56)
+                        NavigationLink {
+                            PlacesView()
+                        } label: {
+                            LinkRow(symbol: "map.fill", title: "Places",
+                                    subtitle: model.places.places.isEmpty ? "Press a DiTAG once to save a spot"
+                                                                          : "\(model.places.places.count) saved")
+                        }
+                        Divider().padding(.leading, 56)
+                        Button {
+                            model.showCamera = true
+                        } label: {
+                            LinkRow(symbol: "camera.fill", title: "Camera", subtitle: "A DiTAG press takes the photo")
+                        }
                     }
                     .buttonStyle(.plain)
                     .card(padding: 4)
@@ -319,6 +333,12 @@ struct DiTagCard: View {
                     Text("Left \(lostAt, style: .relative) ago")
                         .font(.caption)
                         .foregroundStyle(.orange)
+                }
+                if status.state == .quiet, let until = tag.quietUntil {
+                    Text(tag.isQuietUntilTurnedOff ? "Until you turn it off"
+                                                   : "Until \(until.formatted(date: .omitted, time: .shortened))")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             }
             Spacer(minLength: 0)

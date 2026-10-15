@@ -15,6 +15,16 @@ final class PhoneModel: ObservableObject {
     let ringer = PhoneRinger()
     /// The DiTAG key finder. iPhone only, with its own switch: never synced to the watch.
     let diTag: DiTagManager
+    /// The full-quality camera a DiTAG press can shoot with.
+    let camera = CameraManager()
+    /// Where DiTAGs were left and spots saved with a press.
+    let places = PlacesStore()
+
+    /// The one model, for Shortcuts (App Intents run inside DiTether and reach it here).
+    private(set) static weak var shared: PhoneModel?
+
+    /// The camera screen is shown (from Home, a DiTAG, or the "Open DiTAG Camera" shortcut).
+    @Published var showCamera = false
 
     enum RingWatchState: Equatable {
         case idle
@@ -53,7 +63,12 @@ final class PhoneModel: ObservableObject {
         self.location = location
         self.watchStatus = watchStatusFile.load()
         self.diTag = DiTagManager(store: DiTagSettingsStore(), tetherSettings: settings, events: events,
-                                  location: location, ringer: ringer)
+                                  location: location, ringer: ringer, places: places)
+        Self.shared = self
+
+        // A DiTAG press takes a photo while the camera screen is open.
+        diTag.isCameraOpen = { [weak self] in self?.camera.isActive == true }
+        diTag.takePhoto = { [weak self] in _ = self?.camera.shoot() }
 
         connectivity.onSettings = { [weak self] remote in
             _ = self?.settings.adopt(remote)
@@ -98,6 +113,8 @@ final class PhoneModel: ObservableObject {
             .sink { [weak self] _ in
                 self?.beacon.refreshAuthorization()
                 self?.diTag.refreshAuthorization()
+                self?.diTag.refreshQuiet()
+                self?.places.resolveAddresses()
                 // Found it: opening DiTether stops the ringing and the DiTAG follow-up buzzes.
                 self?.ringer.stop()
                 self?.diTag.stopFollowUps()
@@ -119,6 +136,20 @@ final class PhoneModel: ObservableObject {
             }
             .store(in: &cancellables)
 
+        // Keep the "Silence DiTAGs at quiet hours" reminder in step with both sets of settings.
+        let quietHours: AnyPublisher<[Int], Never> = settings.$settings
+            .map { (s: TetherSettings) -> [Int] in [s.quietHoursEnabled ? 1 : 0, s.quietStartMinute, s.quietEndMinute] }
+            .eraseToAnyPublisher()
+        let tagPrompt: AnyPublisher<[Int], Never> = diTag.store.$settings
+            .map { (s: DiTagSettings) -> [Int] in [s.quietHoursPrompt ? 1 : 0, s.tags.count] }
+            .eraseToAnyPublisher()
+        quietHours.merge(with: tagPrompt)
+            .sink { [weak self] _ in
+                // After the stores publish, so the manager reads the new values.
+                DispatchQueue.main.async { self?.diTag.updateQuietHoursPrompt() }
+            }
+            .store(in: &cancellables)
+
         let publishers: [ObservableObjectPublisher] = [
             settings.objectWillChange,
             events.objectWillChange,
@@ -128,7 +159,9 @@ final class PhoneModel: ObservableObject {
             launcher.objectWillChange,
             ringer.objectWillChange,
             diTag.objectWillChange,
-            diTag.store.objectWillChange
+            diTag.store.objectWillChange,
+            camera.objectWillChange,
+            places.objectWillChange
         ]
         for publisher in publishers {
             publisher
