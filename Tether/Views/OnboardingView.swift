@@ -29,11 +29,8 @@ struct OnboardingView: View {
                     }
                 } label: {
                     Text(buttonTitle)
-                        .font(.headline)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 6)
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(PrimaryButtonStyle())
                 .padding(.horizontal, 24)
                 .padding(.vertical, 16)
             }
@@ -66,11 +63,7 @@ private struct PageLayout<Content: View>: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 20) {
-                Image(systemName: symbol)
-                    .font(.system(size: 52, weight: .semibold))
-                    .foregroundStyle(color)
-                    .frame(width: 112, height: 112)
-                    .background(color.opacity(0.15), in: Circle())
+                PulsingShield(symbol: symbol, color: color, isLive: false)
                     .padding(.top, 32)
                 VStack(spacing: 8) {
                     Text(title)
@@ -224,7 +217,7 @@ private struct SetupPage: View {
                         .font(.footnote)
                         .foregroundStyle(.orange)
                 }
-                Text("Anything left shows on the Status screen until it's done.")
+                Text("Anything left shows on Home until it's done.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }

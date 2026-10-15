@@ -64,6 +64,9 @@ final class PhoneModel: ObservableObject {
         connectivity.onCommand = { [weak self] command in
             self?.handle(command)
         }
+        connectivity.onTagRequest = { [weak self] request in
+            self?.diTag.handleWatchRequest(request) ?? []
+        }
         connectivity.onStatus = { [weak self] status in
             self?.adopt(status)
         }
@@ -95,8 +98,9 @@ final class PhoneModel: ObservableObject {
             .sink { [weak self] _ in
                 self?.beacon.refreshAuthorization()
                 self?.diTag.refreshAuthorization()
-                // Found it: opening DiTether stops the ringing.
+                // Found it: opening DiTether stops the ringing and the DiTAG follow-up buzzes.
                 self?.ringer.stop()
+                self?.diTag.stopFollowUps()
             }
             .store(in: &cancellables)
 

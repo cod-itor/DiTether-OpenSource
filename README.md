@@ -58,13 +58,17 @@ Your Apple Watch tells you the moment you walk away from your iPhone. DiTether w
 
 ### DiTAG: your keys and bag too (optional, iPhone only)
 
-Cheap Bluetooth key finders (sold as "iTAG") on your keys, bag or wallet. Add up to 8; each has its own name, switch, snooze and History entries. The iPhone watches them; nothing about them goes to the watch app.
+Cheap Bluetooth key finders (sold as "iTAG") on your keys, bag or wallet. Add up to 8; each has its own name, switch, snooze and History entries. The iPhone watches them. The watch only shows them live on its DiTAGs screen and stores nothing.
 
-- **Left-behind alert:** when the DiTAG's Bluetooth link drops and it isn't back within a few seconds (adjustable, 0–30 s), the iPhone vibrates hard for up to 30 s and shows "Keys left behind". With the iPhone locked, the notification also appears on your watch, the normal iOS way. A blip at the edge of range leaves no trace.
+- **Left-behind alert:** the moment a DiTAG's Bluetooth link drops, the iPhone vibrates hard (or, if you pick **Sound + vibrate**, also plays the loud alarm at full volume, even on silent) for up to 30 s and shows "Keys left behind", repeated by iOS every 5 s so it buzzes even if DiTether is paused. With the iPhone locked, the notifications also reach your watch, the normal iOS way. If it reconnects within 5 s, the alert stops and leaves no History entry.
 - **"Left it on purpose"** right on the notification, and **Snooze**: until it's back in range, or 30 min / 1 h / 3 h / 8 h. Quiet hours and safe places apply too. The watch snooze does not silence your keys.
 - **Play sound on DiTAG,** with a Near / Medium / Far signal reading while the DiTAG tab is open.
 - **Double-press the DiTAG button** to ring the iPhone at full volume, even on silent. Any press stops it.
-- **Battery level,** and History entries with a tag icon and where it was left.
+- **Early warning:** one tap and a "Keys getting far" notification when the signal gets weak, before the disconnect alert. Works while DiTether is open or awake; iOS pauses it in the background.
+- **Where it was left:** a map on the tag's screen while it's out of range, with "Left here 12 min ago" and Open in Maps.
+- **Battery level,** plus one "battery low" notification at 15% (a dead DiTAG looks just like a lost one).
+- **On the watch:** a DiTAGs screen listing each one (with you / left behind, battery). Tap one to make it beep.
+- **History** entries with a tag icon and where it was left.
 - **A switch per DiTAG.** Off means no Bluetooth connection and nothing running for it. With none on (or none set up), DiTAG uses no Bluetooth at all.
 
 ### Staying quiet when it's fine

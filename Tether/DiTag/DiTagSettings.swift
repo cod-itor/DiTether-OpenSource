@@ -12,6 +12,11 @@ struct DiTag: Codable, Equatable, Identifiable {
     var snoozedUntil: Date?
     /// No left-behind alerts until it is back in range ("I'm leaving it here on purpose").
     var snoozedUntilBack = false
+    /// Where the iPhone was when this DiTAG last went out of range (so, roughly where it was left).
+    var lastLeftFix: GeoFix?
+    var lastLeftAt: Date?
+    /// The low-battery notification was shown; cleared when a new battery shows a high level.
+    var lowBatteryWarned = false
 
     init(id: UUID, name: String) {
         self.id = id
@@ -37,6 +42,9 @@ struct DiTag: Codable, Equatable, Identifiable {
         isEnabled = (try? c.decodeIfPresent(Bool.self, forKey: .isEnabled)) ?? true
         snoozedUntil = try? c.decodeIfPresent(Date.self, forKey: .snoozedUntil)
         snoozedUntilBack = (try? c.decodeIfPresent(Bool.self, forKey: .snoozedUntilBack)) ?? false
+        lastLeftFix = try? c.decodeIfPresent(GeoFix.self, forKey: .lastLeftFix)
+        lastLeftAt = try? c.decodeIfPresent(Date.self, forKey: .lastLeftAt)
+        lowBatteryWarned = (try? c.decodeIfPresent(Bool.self, forKey: .lowBatteryWarned)) ?? false
     }
 }
 
@@ -47,11 +55,11 @@ struct DiTagSettings: Codable, Equatable {
     var ringOnDoublePress = true
     /// Remember where the iPhone was when a DiTAG went out of range.
     var saveLocation = true
-    /// How long a DiTAG may be out of range before the alert, so a blip at the edge of range stays
-    /// quiet. Kept short enough to fit the background time iOS gives after a disconnect.
-    var graceSeconds = 5
+    /// Tap and notify when a DiTAG's signal gets weak, before it disconnects.
+    var earlyWarning = true
+    /// Left behind: play the loud alarm (full volume, also on silent) as well as vibrating.
+    var alarmSound = false
 
-    static let graceRange = 0...30
     /// iOS keeps only a handful of Bluetooth connections at once (the watch uses one as well).
     static let maxTags = 8
 
@@ -74,7 +82,6 @@ struct DiTagSettings: Codable, Equatable {
 
     var sanitized: DiTagSettings {
         var copy = self
-        copy.graceSeconds = min(max(graceSeconds, Self.graceRange.lowerBound), Self.graceRange.upperBound)
         for index in copy.tags.indices {
             copy.tags[index].name = String(copy.tags[index].name.prefix(30))
         }
@@ -84,7 +91,7 @@ struct DiTagSettings: Codable, Equatable {
     init() {}
 
     private enum CodingKeys: String, CodingKey {
-        case tags, ringOnDoublePress, saveLocation, graceSeconds
+        case tags, ringOnDoublePress, saveLocation, earlyWarning, alarmSound
         // From the first, single-DiTAG version; read once and moved into `tags`.
         case savedPeripheralID, name, isEnabled, snoozedUntil, snoozedUntilBack
     }
@@ -99,7 +106,8 @@ struct DiTagSettings: Codable, Equatable {
         read(.tags, &tags)
         read(.ringOnDoublePress, &ringOnDoublePress)
         read(.saveLocation, &saveLocation)
-        read(.graceSeconds, &graceSeconds)
+        read(.earlyWarning, &earlyWarning)
+        read(.alarmSound, &alarmSound)
         if tags.isEmpty, let legacyID = try? c.decodeIfPresent(UUID.self, forKey: .savedPeripheralID) {
             var tag = DiTag(id: legacyID, name: (try? c.decodeIfPresent(String.self, forKey: .name)) ?? "Keys")
             read(.isEnabled, &tag.isEnabled)
@@ -114,7 +122,8 @@ struct DiTagSettings: Codable, Equatable {
         try c.encode(tags, forKey: .tags)
         try c.encode(ringOnDoublePress, forKey: .ringOnDoublePress)
         try c.encode(saveLocation, forKey: .saveLocation)
-        try c.encode(graceSeconds, forKey: .graceSeconds)
+        try c.encode(earlyWarning, forKey: .earlyWarning)
+        try c.encode(alarmSound, forKey: .alarmSound)
     }
 }
 

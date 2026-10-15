@@ -60,6 +60,11 @@ struct WatchRootView: View {
                             Label("Find iPhone", systemImage: "location.magnifyingglass")
                         }
                     }
+                    NavigationLink {
+                        WatchTagsView()
+                    } label: {
+                        Label("DiTAGs", systemImage: "tag.fill")
+                    }
                     // One tap to stop the background session (and its battery use) when you don't need it.
                     Toggle(isOn: model.binding(\.protectionEnabled)) {
                         Label("Protection", systemImage: "shield.fill")

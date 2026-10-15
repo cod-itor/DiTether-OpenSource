@@ -12,6 +12,7 @@ enum Wire {
         case status
         case testAlert
         case command
+        case tagRequest
     }
 
     struct Envelope: Codable {
@@ -98,6 +99,8 @@ final class ConnectivityService: NSObject, ObservableObject {
     var onActivated: (() -> Void)?
     var onTestAlert: ((TestAlertLevel) -> Void)?
     var onCommand: ((RemoteCommand) -> Void)?
+    /// iPhone side: answers the watch's DiTAG screen with the current list.
+    var onTagRequest: ((TagRequest) -> [WatchTagInfo])?
     /// How long the latest answered ping took. Bluetooth and local Wi-Fi answer in well under a
     /// second; a relay through iCloud is usually much slower.
     private(set) var lastProbeRoundTrip: TimeInterval?
@@ -186,6 +189,29 @@ final class ConnectivityService: NSObject, ObservableObject {
     func send(_ command: RemoteCommand, timeout: TimeInterval = 6) async -> Bool {
         await sendLive(.command, command, timeout: timeout)
     }
+
+    #if os(watchOS)
+    /// Asks the iPhone for its DiTAGs (and to beep one). nil if the iPhone did not answer.
+    func request(_ tagRequest: TagRequest, timeout: TimeInterval = 5) async -> [WatchTagInfo]? {
+        guard let session, session.activationState == .activated, session.isReachable,
+              let payload = Wire.pack(.tagRequest, tagRequest),
+              let data = payload[Wire.key] as? Data else { return nil }
+        let reply = await withCheckedContinuation { (continuation: CheckedContinuation<Data?, Never>) in
+            Self.sendQuery(data, on: session, timeout: timeout, gate: OneShot(continuation))
+        }
+        guard let reply else { return nil }
+        lastHeardFromPeer = Date()
+        return try? JSONDecoder().decode([WatchTagInfo].self, from: reply)
+    }
+
+    private nonisolated static func sendQuery(_ data: Data, on session: WCSession, timeout: TimeInterval,
+                                              gate: OneShot<Data?>) {
+        session.sendMessage([Wire.key: data],
+                            replyHandler: { reply in gate.finish(reply[Wire.key] as? Data) },
+                            errorHandler: { _ in gate.finish(nil) })
+        DispatchQueue.global().asyncAfter(deadline: .now() + timeout) { gate.finish(nil) }
+    }
+    #endif
 
     private func sendLive<T: Encodable>(_ kind: Wire.Kind, _ value: T, timeout: TimeInterval) async -> Bool {
         guard let session, session.activationState == .activated, session.isReachable,
@@ -301,6 +327,15 @@ extension ConnectivityService: WCSessionDelegate {
     nonisolated func session(_ session: WCSession,
                              didReceiveMessage message: [String: Any],
                              replyHandler: @escaping ([String: Any]) -> Void) {
+        // The watch's DiTAG screen: answered with the list, after doing what it asked.
+        if let tagRequest = Wire.unpack(TagRequest.self, kind: .tagRequest, from: message) {
+            Task { @MainActor in
+                self.lastHeardFromPeer = Date()
+                let tags = self.onTagRequest?(tagRequest) ?? []
+                replyHandler([Wire.key: (try? JSONEncoder().encode(tags)) ?? Data()])
+            }
+            return
+        }
         let level = Wire.unpack(TestAlertLevel.self, kind: .testAlert, from: message)
         let command = Wire.unpack(RemoteCommand.self, kind: .command, from: message)
         replyHandler([:])

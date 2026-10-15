@@ -1,8 +1,9 @@
 import SwiftUI
 
-/// The big card at the top of the Status screen: one clear answer plus the one thing to do about it.
-struct StatusHero: View {
+/// The big card at the top of Home: one clear answer, an animated shield, and the one thing to do.
+struct ProtectionHero: View {
     @EnvironmentObject private var model: PhoneModel
+    @Environment(\.colorScheme) private var scheme
     let status: ProtectionStatus
 
     private struct Look {
@@ -33,7 +34,7 @@ struct StatusHero: View {
             return Look(symbol: "moon.zzz.fill", color: .gray,
                         title: "Protection is off",
                         detail: "Your watch is not checking for your iPhone.",
-                        action: ("Turn on", { model.edit { $0.protectionEnabled = true } }))
+                        action: ("Turn on protection", { model.edit { $0.protectionEnabled = true } }))
         case .watchNotSetUp:
             return Look(symbol: "applewatch", color: .orange,
                         title: "Finish setup on your watch",
@@ -50,36 +51,35 @@ struct StatusHero: View {
                         detail: "If this does not change in a minute, open DiTether on your watch.",
                         action: ("Open on watch", { model.launcher.openOnWatch() }))
         case .silenced(let until):
-            return Look(symbol: "bell.slash.fill", color: .blue,
+            return Look(symbol: "bell.slash.fill", color: .indigo,
                         title: "Alerts silenced",
                         detail: "Until \(until.formatted(date: .omitted, time: .shortened)). Your watch keeps checking quietly.",
                         action: ("Resume alerts", { model.resumeAlerts() }))
         case .protected:
             return Look(symbol: "checkmark.shield.fill", color: .green,
                         title: "You're protected",
-                        detail: "Your watch will tap you if you leave your iPhone behind.")
+                        detail: "Your watch taps you the moment your iPhone gets left behind.")
         }
     }
 
     var body: some View {
         let look = self.look
-        VStack(spacing: 12) {
-            Image(systemName: look.symbol)
-                .font(.system(size: 40, weight: .semibold))
-                .foregroundStyle(look.color)
-                .frame(width: 84, height: 84)
-                .background(look.color.opacity(0.15), in: Circle())
-            Text(look.title)
-                .font(.title2.bold())
-                .multilineTextAlignment(.center)
-            Text(look.detail)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
+        VStack(spacing: 14) {
+            PulsingShield(symbol: look.symbol, color: look.color, isLive: status == .protected)
+                .padding(.top, 6)
+            VStack(spacing: 6) {
+                Text(look.title)
+                    .font(.title2.bold())
+                    .multilineTextAlignment(.center)
+                Text(look.detail)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             if let action = look.action {
                 Button(action.title, action: action.run)
-                    .buttonStyle(.borderedProminent)
-                    .tint(look.color == .gray ? .accentColor : look.color)
+                    .buttonStyle(PrimaryButtonStyle(color: look.color == .gray ? nil : look.color))
                     .padding(.top, 2)
             }
             if let message = model.launcher.message {
@@ -90,31 +90,79 @@ struct StatusHero: View {
             }
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 12)
-        .animation(.default, value: status)
+        .padding(20)
+        .background {
+            RoundedRectangle(cornerRadius: 28, style: .continuous)
+                .fill(Color(.secondarySystemGroupedBackground))
+            RoundedRectangle(cornerRadius: 28, style: .continuous)
+                .fill(Theme.wash(look.color))
+        }
+        .overlay {
+            if scheme == .dark {
+                RoundedRectangle(cornerRadius: 28, style: .continuous)
+                    .strokeBorder(look.color.opacity(0.25), lineWidth: 1)
+            }
+        }
+        .shadow(color: look.color.opacity(scheme == .dark ? 0.25 : 0.15), radius: 16, y: 6)
+        .animation(.snappy, value: status)
     }
 }
 
-/// The one rule that causes false alarms when it is broken, so it gets its own card.
+/// The status symbol inside rings that ripple outwards while protection is live.
+struct PulsingShield: View {
+    let symbol: String
+    let color: Color
+    var isLive: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var ripple = false
+
+    var body: some View {
+        ZStack {
+            if isLive && !reduceMotion {
+                ForEach(0..<2, id: \.self) { ring in
+                    Circle()
+                        .stroke(color.opacity(0.35), lineWidth: 2)
+                        .scaleEffect(ripple ? 1.55 : 0.9)
+                        .opacity(ripple ? 0 : 0.9)
+                        .animation(.easeOut(duration: 2.4).repeatForever(autoreverses: false)
+                            .delay(Double(ring) * 1.2), value: ripple)
+                }
+            }
+            Circle()
+                .fill(color.opacity(0.16))
+            Circle()
+                .fill(color.gradient)
+                .padding(14)
+                .shadow(color: color.opacity(0.4), radius: 10, y: 4)
+            Image(systemName: symbol)
+                .font(.system(size: 34, weight: .semibold))
+                .foregroundStyle(.white)
+                .contentTransition(.symbolEffect(.replace))
+        }
+        .frame(width: 108, height: 108)
+        .onAppear { ripple = true }
+    }
+}
+
+/// The one rule that causes false alarms when it is broken, as a compact tip.
 struct KeepOpenCard: View {
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
-            Image(systemName: "hand.raised.fill")
-                .font(.title3)
-                .foregroundStyle(.orange)
+            IconBadge(symbol: "hand.raised.fill", color: .orange, size: 36)
             VStack(alignment: .leading, spacing: 3) {
-                Text("Keep DiTether open")
-                    .font(.headline)
-                Text("Don't swipe it away in the app switcher. If you do, your watch thinks your iPhone was left behind.")
-                    .font(.subheadline)
+                Text("Keep DiTether in the background")
+                    .font(.subheadline.weight(.semibold))
+                Text("Don't swipe it away in the app switcher, or your watch and DiTAGs lose touch with it.")
+                    .font(.caption)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .padding(.vertical, 4)
+        .card(padding: 14)
     }
 }
 
-/// One line of the setup checklist, used on the Status screen and in the intro.
+/// One line of the setup checklist, used on Home and in the intro.
 struct SetupStepRow: View {
     let step: SetupStep
 

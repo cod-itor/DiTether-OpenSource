@@ -1,176 +1,7 @@
 import SwiftUI
+import MapKit
 
-/// The DiTAG tab: every DiTAG at a glance, adding new ones, and the options they share.
-struct DiTagView: View {
-    @EnvironmentObject private var model: PhoneModel
-
-    private var manager: DiTagManager { model.diTag }
-    private var settings: DiTagSettings { manager.settings }
-
-    var body: some View {
-        NavigationStack {
-            Form {
-                if manager.bluetooth != .ok {
-                    bluetoothSection
-                }
-                if !settings.hasTags && manager.setupPhase == nil {
-                    introSection
-                }
-                if !settings.tags.isEmpty {
-                    Section {
-                        ForEach(settings.tags) { tag in
-                            NavigationLink(value: tag.id) {
-                                DiTagRow(tag: tag, status: manager.status(tag.id))
-                            }
-                        }
-                    } header: {
-                        Text("Your DiTAGs")
-                    } footer: {
-                        Text("Keep DiTether in the background. Swiping it away stops the DiTAG alerts.")
-                    }
-                }
-                addSection
-                if settings.hasTags {
-                    sharedOptionsSection
-                }
-            }
-            .navigationTitle("DiTAG")
-            .navigationDestination(for: UUID.self) { id in
-                DiTagDetailView(tagID: id)
-            }
-        }
-    }
-
-    private var bluetoothSection: some View {
-        Section {
-            Label(manager.bluetooth == .unauthorized ? "Bluetooth is not allowed" : "Bluetooth is off",
-                  systemImage: "exclamationmark.triangle.fill")
-                .foregroundStyle(.orange)
-            Text(manager.bluetooth == .unauthorized
-                 ? "DiTether needs Bluetooth to connect to your DiTAGs."
-                 : "Your DiTAGs reconnect by themselves when Bluetooth is back on.")
-                .foregroundStyle(.secondary)
-            if manager.bluetooth == .unauthorized {
-                Button("Open Settings") {
-                    if let url = URL(string: UIApplication.openSettingsURLString) {
-                        UIApplication.shared.open(url)
-                    }
-                }
-            }
-        }
-    }
-
-    private var introSection: some View {
-        Section {
-            VStack(alignment: .leading, spacing: 10) {
-                Image(systemName: "tag.fill")
-                    .font(.largeTitle)
-                    .foregroundStyle(.tint)
-                Text("Never leave your keys behind")
-                    .font(.title3.bold())
-                Text("Attach a DiTAG to your keys, bag or wallet. Your iPhone vibrates and alerts you, also on your watch, when one is left behind.")
-                    .foregroundStyle(.secondary)
-            }
-            .padding(.vertical, 6)
-        }
-    }
-
-    @ViewBuilder
-    private var addSection: some View {
-        if let phase = manager.setupPhase {
-            Section {
-                HStack(spacing: 14) {
-                    if phase == .confirming {
-                        Image(systemName: "hand.tap.fill")
-                            .font(.title)
-                            .foregroundStyle(.tint)
-                            .symbolEffect(.pulse)
-                    } else {
-                        ProgressView()
-                    }
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(phase == .confirming ? "Press the DiTAG button once" : "Looking for a new DiTAG…")
-                            .font(.headline)
-                        Text(phase == .confirming ? "It just beeped, so you know which one." : "Hold the new one close to your iPhone.")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                .padding(.vertical, 6)
-                Button("Cancel", role: .cancel) { manager.cancelSetup() }
-            }
-        } else {
-            Section {
-                Button {
-                    model.requestNotificationPermission()
-                    manager.startSetup()
-                } label: {
-                    Label(settings.hasTags ? "Add another DiTAG" : "Set up DiTAG", systemImage: "plus.circle.fill")
-                        .font(.headline)
-                }
-                .disabled(!manager.canAddMore || manager.bluetooth == .unauthorized)
-            } footer: {
-                if let message = manager.setupMessage {
-                    Text(message).foregroundStyle(.orange)
-                } else if !manager.canAddMore {
-                    Text("Up to \(DiTagSettings.maxTags) DiTAGs. iOS only keeps a few Bluetooth connections at once.")
-                } else {
-                    Text("Turn the new DiTAG on (hold its button 3–5 s until it beeps twice) and close iSearching or nRF Connect. Only one DiTAG at a time should be near the iPhone while adding.")
-                }
-            }
-        }
-    }
-
-    private var sharedOptionsSection: some View {
-        Section {
-            Toggle("Ring iPhone on double-press", isOn: manager.binding(\.ringOnDoublePress))
-            Toggle("Save where it was left", isOn: Binding(
-                get: { settings.saveLocation },
-                set: { on in
-                    manager.edit { $0.saveLocation = on }
-                    if on && !model.location.isAuthorized { model.location.requestSharingAuthorization() }
-                }))
-            Stepper(value: manager.binding(\.graceSeconds), in: DiTagSettings.graceRange) {
-                LabeledContent("Alert after", value: settings.graceSeconds == 0 ? "Right away" : "\(settings.graceSeconds) s")
-            }
-        } header: {
-            Text("All DiTAGs")
-        } footer: {
-            Text("A short wait keeps a blip at the edge of range quiet. Quiet hours and safe places from Settings apply to every DiTAG.")
-        }
-    }
-}
-
-/// One DiTAG in the list.
-private struct DiTagRow: View {
-    let tag: DiTag
-    let status: DiTagManager.TagStatus
-
-    var body: some View {
-        HStack(spacing: 12) {
-            Image(systemName: DiTagLook.icon(status.state))
-                .font(.title2)
-                .foregroundStyle(DiTagLook.color(status.state))
-                .frame(width: 32)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(tag.displayName)
-                    .font(.headline)
-                DiTagLook.text(status, snoozed: tag.isSnoozed())
-                    .font(.subheadline)
-                    .foregroundStyle(DiTagLook.color(status.state))
-            }
-            Spacer()
-            if let battery = status.battery, status.state != .off {
-                Label("\(battery)%", systemImage: DiTagLook.batteryIcon(battery))
-                    .font(.caption)
-                    .foregroundStyle(battery <= 15 ? Color.red : Color.secondary)
-                    .labelStyle(.titleAndIcon)
-            }
-        }
-    }
-}
-
-/// One DiTAG: find it, snooze it, rename it, switch it off or forget it.
+/// One DiTAG: a live header, find it, see where it was left, snooze, rename, switch off or forget.
 struct DiTagDetailView: View {
     @EnvironmentObject private var model: PhoneModel
     @Environment(\.dismiss) private var dismiss
@@ -197,50 +28,30 @@ struct DiTagDetailView: View {
     private func form(_ tag: DiTag, status: DiTagManager.TagStatus) -> some View {
         Form {
             Section {
+                header(tag, status: status)
+                    .listRowInsets(EdgeInsets())
+                    .listRowBackground(Color.clear)
+            }
+
+            Section {
                 Toggle(isOn: Binding(get: { tag.isEnabled }, set: { manager.setEnabled(tagID, $0) })) {
-                    HStack(spacing: 12) {
-                        Image(systemName: DiTagLook.icon(status.state))
-                            .font(.title2)
-                            .foregroundStyle(DiTagLook.color(status.state))
-                            .frame(width: 32)
-                        DiTagLook.text(status, snoozed: tag.isSnoozed())
-                            .font(.headline)
-                            .foregroundStyle(DiTagLook.color(status.state))
-                    }
+                    Label("Watch this DiTAG", systemImage: "dot.radiowaves.left.and.right")
                 }
-                if tag.isEnabled {
-                    if let battery = status.battery {
-                        LabeledContent("Battery") {
-                            Label("\(battery)%", systemImage: DiTagLook.batteryIcon(battery))
-                                .foregroundStyle(battery <= 15 ? Color.red : Color.secondary)
-                        }
-                    }
-                    if let proximity = status.proximity, status.state == .connected {
-                        LabeledContent("Distance", value: proximity.title)
-                    }
-                }
+                .tint(.green)
             } footer: {
-                if !tag.isEnabled {
-                    Text("Off: DiTether is not connected to this DiTAG and nothing runs for it.")
-                }
+                Text(tag.isEnabled
+                     ? "Your iPhone alerts you the moment it goes out of range."
+                     : "Off: not connected, and nothing runs for it.")
+            }
+
+            if status.state == .lost, let fix = tag.lastLeftFix {
+                lastSeenSection(tag, fix: fix)
             }
 
             if tag.isEnabled {
                 Section {
-                    if status.isBeeping {
-                        Button {
-                            manager.stopBeep(tagID)
-                        } label: {
-                            Label("Stop sound", systemImage: "speaker.slash.fill")
-                        }
-                    } else {
-                        Button {
-                            manager.beep(tagID)
-                        } label: {
-                            Label("Play sound", systemImage: "speaker.wave.3.fill")
-                        }
-                        .disabled(status.state != .connected)
-                    }
+                    findButton(status)
+                        .listRowInsets(EdgeInsets(top: 12, leading: 16, bottom: 12, trailing: 16))
                 } header: {
                     Text("Find")
                 } footer: {
@@ -283,6 +94,10 @@ struct DiTagDetailView: View {
                     .onChange(of: editingName) { _, editing in
                         if !editing { saveName() }
                     }
+                NameSuggestions(selection: tag.displayName) { name in
+                    nameDraft = name
+                    saveName()
+                }
             }
 
             Section {
@@ -301,14 +116,232 @@ struct DiTagDetailView: View {
         }
     }
 
+    /// Big icon, name, live status, battery and signal.
+    private func header(_ tag: DiTag, status: DiTagManager.TagStatus) -> some View {
+        let color = DiTagLook.color(status.state) == .secondary ? Color.gray : DiTagLook.color(status.state)
+        return VStack(spacing: 12) {
+            PulsingShield(symbol: DiTagLook.icon(status.state), color: color,
+                          isLive: status.state == .connected)
+            Text(tag.displayName)
+                .font(.title.bold())
+            DiTagLook.text(status, snoozed: tag.isSnoozed())
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(color)
+            if tag.isEnabled {
+                HStack(spacing: 10) {
+                    StatTile(title: "Battery",
+                             value: status.battery.map { "\($0)%" } ?? "–",
+                             color: (status.battery ?? 100) <= 15 ? .red : .primary)
+                    StatTile(title: "Distance",
+                             value: status.state == .connected ? (status.proximity?.title ?? "…") : "–",
+                             color: .primary,
+                             bars: status.state == .connected ? status.signal.map(SignalBars.level(forRSSI:)) : nil)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 8)
+    }
+
+    @ViewBuilder
+    private func findButton(_ status: DiTagManager.TagStatus) -> some View {
+        if status.isBeeping {
+            Button {
+                manager.stopBeep(tagID)
+            } label: {
+                Label("Stop sound", systemImage: "speaker.slash.fill")
+            }
+            .buttonStyle(PrimaryButtonStyle(color: .orange))
+        } else {
+            Button {
+                manager.beep(tagID)
+            } label: {
+                Label("Play sound", systemImage: "speaker.wave.3.fill")
+            }
+            .buttonStyle(PrimaryButtonStyle())
+            .disabled(status.state != .connected)
+            .opacity(status.state == .connected ? 1 : 0.45)
+        }
+    }
+
+    /// Where the iPhone was when the DiTAG went out of range: it is within about 25 m of there.
+    private func lastSeenSection(_ tag: DiTag, fix: GeoFix) -> some View {
+        let coordinate = CLLocationCoordinate2D(latitude: fix.latitude, longitude: fix.longitude)
+        return Section {
+            Map(initialPosition: .region(MKCoordinateRegion(center: coordinate,
+                                                            latitudinalMeters: 300,
+                                                            longitudinalMeters: 300))) {
+                Marker(tag.displayName, systemImage: "tag.fill", coordinate: coordinate)
+                    .tint(.orange)
+                UserAnnotation()
+            }
+            .frame(height: 200)
+            .listRowInsets(EdgeInsets())
+
+            if let at = tag.lastLeftAt {
+                Label {
+                    Text("Left here \(at, style: .relative) ago")
+                } icon: {
+                    Image(systemName: "mappin.and.ellipse")
+                }
+            }
+            Link(destination: mapsURL(tag, fix: fix)) {
+                Label("Open in Maps", systemImage: "map")
+            }
+        } header: {
+            Text("Where it was left")
+        } footer: {
+            Text("Where your iPhone was when the DiTAG went out of range, accurate to about \(Int(fix.accuracy)) m. It's usually within 25 m of here.")
+        }
+    }
+
+    private func mapsURL(_ tag: DiTag, fix: GeoFix) -> URL {
+        let query = tag.displayName.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "DiTAG"
+        return URL(string: "https://maps.apple.com/?ll=\(fix.latitude),\(fix.longitude)&q=\(query)")
+            ?? URL(string: "https://maps.apple.com")!
+    }
+
     private func saveName() {
         manager.rename(tagID, to: nameDraft)
         nameDraft = manager.settings.tag(tagID)?.displayName ?? nameDraft
     }
 }
 
-/// Icons, colours and wording shared by the list and the detail screen.
-private enum DiTagLook {
+/// A small figure in the DiTAG header.
+private struct StatTile: View {
+    let title: String
+    let value: String
+    var color: Color
+    var bars: Int?
+
+    var body: some View {
+        VStack(spacing: 4) {
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            HStack(spacing: 6) {
+                Text(value)
+                    .font(.headline)
+                    .monospacedDigit()
+                    .foregroundStyle(color)
+                if let bars {
+                    SignalBars(level: bars)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 10)
+        .background(Color(.secondarySystemGroupedBackground),
+                    in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+}
+
+/// One-tap names, so most people never type.
+struct NameSuggestions: View {
+    let selection: String
+    let choose: (String) -> Void
+
+    static let names = ["Keys", "Bag", "Wallet", "Backpack", "Car", "Bike", "Laptop"]
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(Self.names, id: \.self) { name in
+                    let isSelected = name.caseInsensitiveCompare(selection) == .orderedSame
+                    Button(name) { choose(name) }
+                        .font(.subheadline.weight(.medium))
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .foregroundStyle(isSelected ? .white : Theme.brand)
+                        .background(isSelected ? AnyShapeStyle(Theme.brand) : AnyShapeStyle(Theme.brand.opacity(0.12)),
+                                    in: Capsule())
+                }
+            }
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+/// Options shared by every DiTAG.
+struct DiTagOptionsView: View {
+    @EnvironmentObject private var model: PhoneModel
+    @State private var showGuide = false
+
+    private var manager: DiTagManager { model.diTag }
+    private var settings: DiTagSettings { manager.settings }
+
+    var body: some View {
+        Form {
+            Section {
+                Picker("When left behind", selection: manager.binding(\.alarmSound)) {
+                    Text("Vibrate").tag(false)
+                    Text("Sound + vibrate").tag(true)
+                }
+                Toggle("Early warning", isOn: Binding(get: { settings.earlyWarning },
+                                                      set: { manager.setEarlyWarning($0) }))
+            } header: {
+                Text("Alerts")
+            } footer: {
+                Text("Your iPhone alerts the moment a DiTAG disconnects. Sound plays at full volume, also on silent, for up to 30 s. Early warning taps once when the signal gets weak, while DiTether is open or awake.")
+            }
+
+            Section {
+                Toggle("Ring iPhone on double-press", isOn: manager.binding(\.ringOnDoublePress))
+                Toggle("Save where it was left", isOn: Binding(
+                    get: { settings.saveLocation },
+                    set: { on in
+                        manager.edit { $0.saveLocation = on }
+                        if on && !model.location.isAuthorized { model.location.requestSharingAuthorization() }
+                    }))
+            } footer: {
+                Text("Quiet hours and safe places from Settings apply to every DiTAG.")
+            }
+
+            Section {
+                NavigationLink("Activity") { DiTagActivityView() }
+                Button("How to set up a DiTAG") { showGuide = true }
+            }
+        }
+        .navigationTitle("DiTAG options")
+        .navigationBarTitleDisplayMode(.inline)
+        .sheet(isPresented: $showGuide) {
+            DiTagSetupGuide(startAtIntro: true)
+                .environmentObject(model)
+        }
+    }
+}
+
+/// What the DiTAGs did, newest first: the quickest way to check a walk test.
+struct DiTagActivityView: View {
+    @EnvironmentObject private var model: PhoneModel
+
+    var body: some View {
+        List {
+            if model.diTag.activity.isEmpty {
+                ContentUnavailableView("Nothing yet", systemImage: "list.bullet.rectangle",
+                                       description: Text("Disconnects, alerts and why one stayed quiet show up here."))
+            }
+            ForEach(model.diTag.activity) { line in
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(line.text)
+                    Text(line.date.formatted(date: .abbreviated, time: .standard))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
+            }
+        }
+        .navigationTitle("Activity")
+        .toolbar {
+            if !model.diTag.activity.isEmpty {
+                Button("Clear") { model.diTag.clearActivity() }
+            }
+        }
+    }
+}
+
+/// Icons, colours and wording shared by every DiTAG view.
+enum DiTagLook {
     static func icon(_ state: DiTagManager.TagState) -> String {
         switch state {
         case .connected: return "tag.fill"
@@ -326,6 +359,15 @@ private enum DiTagLook {
         }
     }
 
+    static func shortText(_ state: DiTagManager.TagState) -> String {
+        switch state {
+        case .connected: return "With you"
+        case .lost: return "Left behind"
+        case .off: return "Off"
+        case .connecting: return "Connecting…"
+        }
+    }
+
     static func text(_ status: DiTagManager.TagStatus, snoozed: Bool) -> Text {
         switch status.state {
         case .connected:
@@ -339,16 +381,6 @@ private enum DiTagLook {
             return Text("Off")
         case .connecting:
             return Text("Connecting…")
-        }
-    }
-
-    static func batteryIcon(_ level: Int) -> String {
-        switch level {
-        case 76...: return "battery.100"
-        case 51...75: return "battery.75"
-        case 26...50: return "battery.50"
-        case 11...25: return "battery.25"
-        default: return "battery.0"
         }
     }
 }

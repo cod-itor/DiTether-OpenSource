@@ -1,3 +1,4 @@
+import AudioToolbox
 import CoreBluetooth
 import SwiftUI
 import UserNotifications
@@ -74,6 +75,17 @@ final class DiTagManager: NSObject, ObservableObject {
     @Published private(set) var setupPhase: SetupPhase?
     /// Why the last setup did not finish, shown under "Add DiTAG".
     @Published private(set) var setupMessage: String?
+    /// The DiTAG added most recently, so the setup guide can move on to naming it.
+    @Published private(set) var lastAddedID: UUID?
+
+    /// What happened, newest first, so a walk test can be checked afterwards (DiTAG → Activity).
+    struct ActivityLine: Codable, Identifiable, Equatable {
+        var id = UUID()
+        var date: Date
+        var text: String
+    }
+    @Published private(set) var activity: [ActivityLine] = []
+    private let activityFile = JSONFile<[ActivityLine]>(name: "ditag-activity.json")
 
     let store: DiTagSettingsStore
     var settings: DiTagSettings { store.settings }
@@ -103,17 +115,18 @@ final class DiTagManager: NSObject, ObservableObject {
         var peripheral: CBPeripheral?
         var alertCharacteristic: CBCharacteristic?
         var episode: LostEpisode?
-        var graceTask: Task<Void, Never>?
         var pressCount = 0
         var pressTask: Task<Void, Never>?
         var beepResetTask: Task<Void, Never>?
         var launchChecked = false
         var launchCheckTask: Task<Void, Never>?
+        /// Early warning: weak readings in a row, and whether this weak spell was already announced.
+        var weakCount = 0
+        var farWarned = false
 
         init(id: UUID) { self.id = id }
 
         func cancelTasks() {
-            graceTask?.cancel()
             pressTask?.cancel()
             beepResetTask?.cancel()
             launchCheckTask?.cancel()
@@ -121,17 +134,19 @@ final class DiTagManager: NSObject, ObservableObject {
     }
 
     private struct LostEpisode {
-        /// The History entry, recorded when the alert is scheduled. nil = stayed quiet (snooze, quiet
-        /// hours or a safe place), so nothing was recorded.
+        /// The History entry, recorded with the alert. nil = stayed quiet (snooze, quiet hours or a
+        /// safe place), so nothing was recorded.
         var eventID: UUID?
-        var alertAt: Date
+        var startedAt: Date
     }
+
+    /// Back within this long = a blip at the edge of range: the alert stops and leaves no History entry.
+    private static let blipWindow: TimeInterval = 5
 
     private var links: [UUID: Link] = [:]
     /// DiTAGs whose left-behind vibration is going.
     private var alarming: Set<UUID> = []
-    /// DiTAGs inside their grace period; background time is held while any are.
-    private var inGrace: Set<UUID> = []
+    /// Background time held while the spot where a DiTAG was left is being measured.
     private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
 
     // Setup of a new DiTAG
@@ -145,6 +160,21 @@ final class DiTagManager: NSObject, ObservableObject {
 
     private var signalWanted: Set<UUID> = []
     private var signalTask: Task<Void, Never>?
+    /// One position request shared by every DiTAG lost at the same moment (a bag with two tags).
+    private var freshFixTask: Task<GeoFix?, Never>?
+
+    /// Early warning: this many readings in a row below `weakRSSI` (about 6 s) taps once; it is
+    /// announced again only after the signal recovered above `recoveredRSSI`.
+    private static let weakRSSI = -86
+    private static let recoveredRSSI = -78
+    private static let weakReadingsNeeded = 3
+    /// Low battery: warned at or below this, and armed again when a fresh battery reads high.
+    private static let lowBattery = 15
+    private static let freshBattery = 50
+    /// After the alert, iOS delivers this many follow-up notifications, this far apart. Each one
+    /// vibrates the iPhone (and the watch), even when DiTether itself is suspended.
+    private static let followUps = 6
+    private static let followUpSpacing: TimeInterval = 5
 
     nonisolated static let alertNotificationPrefix = "ditag.leftBehind."
     nonisolated static let alertCategory = "ditag.leftBehind"
@@ -163,6 +193,7 @@ final class DiTagManager: NSObject, ObservableObject {
         self.location = location
         self.ringer = ringer
         super.init()
+        activity = activityFile.load() ?? []
         registerNotificationActions()
         // Created right away when a DiTAG is in use, because iOS expects the restored manager to be
         // recreated during launch when it relaunches DiTether for a Bluetooth event.
@@ -187,6 +218,37 @@ final class DiTagManager: NSObject, ObservableObject {
     func setEnabled(_ id: UUID, _ enabled: Bool) {
         store.editTag(id) { $0.isEnabled = enabled }
         reconcile()
+    }
+
+    func setEarlyWarning(_ on: Bool) {
+        edit { $0.earlyWarning = on }
+        if !on {
+            for link in links.values { clearFarWarning(link) }
+        }
+        updateSignalReading()
+    }
+
+    // MARK: - Watch
+
+    /// The watch's DiTAG screen: does what it asked, then answers with every DiTAG's state.
+    func handleWatchRequest(_ request: TagRequest) -> [WatchTagInfo] {
+        switch request {
+        case .list: break
+        case .beep(let id): beep(id)
+        case .stopBeep(let id): stopBeep(id)
+        }
+        return settings.tags.map { tag in
+            let current = status(tag.id)
+            let state: WatchTagInfo.State
+            switch current.state {
+            case .connected: state = .withYou
+            case .lost: state = .leftBehind
+            case .connecting: state = .connecting
+            case .off: state = .off
+            }
+            return WatchTagInfo(id: tag.id, name: tag.displayName, state: state, battery: current.battery,
+                                isBeeping: current.isBeeping, since: current.lostAt)
+        }
     }
 
     // MARK: - Snooze
@@ -286,6 +348,7 @@ final class DiTagManager: NSObject, ObservableObject {
     func appWillTerminate() {
         let watched = settings.tags.filter(\.isEnabled)
         guard !watched.isEmpty else { return }
+        log(nil, "DiTether was closed: DiTAG alerts paused")
         let names = ListFormatter.localizedString(byJoining: watched.map(\.displayName))
         let content = UNMutableNotificationContent()
         content.title = "DiTAG paused"
@@ -345,6 +408,7 @@ final class DiTagManager: NSObject, ObservableObject {
     /// Ends one DiTAG's connection and everything running for it.
     private func tearDown(_ link: Link) {
         endEpisode(link, cancelled: true)
+        clearFarWarning(link)
         link.cancelTasks()
         if let peripheral = link.peripheral, let central {
             central.cancelPeripheralConnection(peripheral)
@@ -390,6 +454,7 @@ final class DiTagManager: NSObject, ObservableObject {
             try? await Task.sleep(nanoseconds: 15_000_000_000)
             guard !Task.isCancelled, let self, let link, self.links[link.id] === link else { return }
             if self.status(link.id).state != .connected && link.episode == nil {
+                self.log(link.id, "Not found after DiTether started")
                 self.beginEpisode(link, lostAt: Date())
             }
         }
@@ -401,6 +466,7 @@ final class DiTagManager: NSObject, ObservableObject {
         guard let peripheral = link.peripheral else { return }
         link.launchChecked = true
         link.launchCheckTask?.cancel()
+        log(link.id, link.episode != nil ? "Back in range" : "Connected")
         update(link.id) { $0.state = .connected }
         // Always rediscover, also for a connection iOS restored: otherwise Beep would have no
         // characteristic to write to after a background relaunch.
@@ -427,15 +493,30 @@ final class DiTagManager: NSObject, ObservableObject {
         update(link.id) { $0.isBeeping = false }
     }
 
+    private func log(_ id: UUID?, _ text: String) {
+        let name = id.flatMap { settings.tag($0)?.displayName }
+        activity.insert(ActivityLine(date: Date(), text: name.map { "\($0): \(text)" } ?? text), at: 0)
+        if activity.count > 80 { activity.removeLast(activity.count - 80) }
+        activityFile.save(activity)
+    }
+
+    func clearActivity() {
+        activity = []
+        activityFile.delete()
+    }
+
     private func update(_ id: UUID, _ change: (inout TagStatus) -> Void) {
         var status = statuses[id] ?? TagStatus()
         change(&status)
         if statuses[id] != status { statuses[id] = status }
     }
 
+    /// Reads the signal every 2 s while a DiTAG screen is open, or for the early warning. Only while
+    /// DiTether is running: iOS pauses this loop when it suspends the app, so it costs nothing then.
     private func updateSignalReading() {
-        let active = signalWanted.contains { status($0).state == .connected }
-        guard active else {
+        let screenOpen = signalWanted.contains { status($0).state == .connected }
+        let warning = settings.earlyWarning && links.values.contains { status($0.id).state == .connected }
+        guard screenOpen || warning else {
             stopSignalReading()
             return
         }
@@ -443,7 +524,8 @@ final class DiTagManager: NSObject, ObservableObject {
         signalTask = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
-                for id in self.signalWanted {
+                let ids = self.settings.earlyWarning ? Set(self.links.keys) : self.signalWanted
+                for id in ids {
                     if let peripheral = self.links[id]?.peripheral, peripheral.state == .connected {
                         peripheral.readRSSI()
                     }
@@ -471,59 +553,139 @@ final class DiTagManager: NSObject, ObservableObject {
         // Alerted (or deliberately quiet) once: a relaunch must not alert again.
         setWithMe(link.id, false)
 
-        let fix = settings.saveLocation ? location.lastKnown : nil
-        guard quietReason(for: tag, fix: fix) == nil else {
-            link.episode = LostEpisode(eventID: nil, alertAt: lostAt)
+        clearFarWarning(link)
+
+        // Remember roughly where it was left, also when the alert stays quiet. iOS's last reading
+        // is only used if it is recent; a fresh one replaces it a moment later.
+        var fix: GeoFix?
+        if settings.saveLocation, let known = location.lastKnown,
+           lostAt.timeIntervalSince(known.timestamp) < 5 * 60 {
+            fix = known
+        }
+        if settings.saveLocation {
+            store.editTag(link.id) {
+                $0.lastLeftAt = lostAt
+                $0.lastLeftFix = fix
+            }
+        }
+        if settings.saveLocation && location.isAuthorized {
+            requestFreshFix(for: link)
+        }
+
+        if let reason = quietReason(for: tag, fix: fix) {
+            log(link.id, "No alert: \(reason)")
+            link.episode = LostEpisode(eventID: nil, startedAt: lostAt)
             return
         }
 
-        let alertAt = lostAt.addingTimeInterval(TimeInterval(settings.graceSeconds))
-        scheduleAlert(for: tag, at: alertAt)
+        // Alert right now, while iOS has DiTether awake for the disconnect: vibrate in a loop (the
+        // silent audio keeps DiTether running), plus notifications that iOS repeats by itself.
+        alarming.insert(link.id)
+        let loud = settings.alarmSound
+        let started = ringer.ring(.leftBehind, sound: loud)
+        scheduleAlert(for: tag)
+        log(link.id, started ? (loud ? "Alert: sound + vibrating" : "Alert: vibrating")
+                             : "Alert: notifications only (iOS blocked the alarm loop)")
 
-        // Recorded now, because DiTether may be suspended before the grace period ends. Removed
-        // again if the DiTAG comes back in time.
-        var event = LeftBehindEvent(startedAt: lostAt, softAlertAt: alertAt, fix: fix)
+        var event = LeftBehindEvent(startedAt: lostAt, softAlertAt: lostAt, fix: fix)
         event.item = tag.displayName
         events.upsert(event)
-        link.episode = LostEpisode(eventID: event.id, alertAt: alertAt)
+        link.episode = LostEpisode(eventID: event.id, startedAt: lostAt)
+    }
 
-        inGrace.insert(link.id)
-        beginBackgroundTime()
-        link.graceTask?.cancel()
-        link.graceTask = Task { [weak self, weak link] in
-            let wait = max(alertAt.timeIntervalSinceNow, 0)
-            try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
-            guard !Task.isCancelled, let self, let link else { return }
-            if link.episode?.eventID != nil {
-                // Vibrate hard and repeatedly, next to the notification's own sound.
-                self.alarming.insert(link.id)
-                self.ringer.ring(.leftBehind)
-            }
-            self.leaveGrace(link.id)
+    private func requestFreshFix(for link: Link) {
+        let pending: Task<GeoFix?, Never>
+        if let freshFixTask {
+            pending = freshFixTask
+        } else {
+            pending = Task { [location] in await location.current(timeout: 10) }
+            freshFixTask = pending
         }
-
-        if settings.saveLocation && location.isAuthorized {
-            let eventID = event.id
-            Task { [weak self, weak link] in
-                guard let self else { return }
-                let fresh = await self.location.current(timeout: 10)
-                if let link { self.adoptFreshFix(fresh, for: eventID, link: link) }
-            }
+        beginBackgroundTime()
+        Task { [weak self, weak link] in
+            let fix = await pending.value
+            guard let self else { return }
+            self.freshFixTask = nil
+            if let link { self.adoptFreshFix(fix, link: link) }
+            self.endBackgroundTime()
         }
     }
 
-    /// A fresh position: store it with the event, and stay quiet after all if it is in a safe place
-    /// and the alert has not gone off yet.
-    private func adoptFreshFix(_ fix: GeoFix?, for eventID: UUID, link: Link) {
-        guard let fix, let episode = link.episode, episode.eventID == eventID,
-              let tag = settings.tag(link.id),
+    /// A fresh position: remember it as where the DiTAG was left, store it with the event, and stop
+    /// the alert after all if it turns out to be in a safe place (left at home is fine).
+    private func adoptFreshFix(_ fix: GeoFix?, link: Link) {
+        guard let fix, let episode = link.episode, let tag = settings.tag(link.id) else { return }
+        store.editTag(link.id) { $0.lastLeftFix = fix }
+        guard let eventID = episode.eventID,
               var event = events.events.first(where: { $0.id == eventID }) else { return }
-        if Date() < episode.alertAt, quietReason(for: tag, fix: fix) != nil {
+        if let reason = quietReason(for: tag, fix: fix) {
+            log(link.id, "Alert stopped: \(reason)")
             silencePendingAlert(link.id)
+            UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: Self.alertIDs(link.id))
+            events.remove(id: eventID)
+            link.episode?.eventID = nil
             return
         }
         event.fix = fix
         events.upsert(event)
+    }
+
+    // MARK: - Early warning
+
+    private static func farNotificationID(_ id: UUID) -> String {
+        "ditag.far." + id.uuidString
+    }
+
+    private func checkEarlyWarning(_ link: Link, rssi: Int) {
+        guard settings.earlyWarning, let tag = settings.tag(link.id) else { return }
+        if rssi < Self.weakRSSI {
+            link.weakCount += 1
+        } else if rssi > Self.recoveredRSSI {
+            link.weakCount = 0
+            clearFarWarning(link)
+        }
+        guard link.weakCount >= Self.weakReadingsNeeded, !link.farWarned else { return }
+        link.farWarned = true
+        guard quietReason(for: tag, fix: location.lastKnown) == nil else { return }
+        // One tap, the first reminder; the disconnect brings the strong alert.
+        log(link.id, "Signal weak (\(rssi) dBm): early warning")
+        AudioServicesPlaySystemSound(kSystemSoundID_Vibrate)
+        let content = UNMutableNotificationContent()
+        content.title = "\(tag.displayName) getting far"
+        content.body = "Its signal is weak. Did you forget it?"
+        content.sound = .default
+        content.threadIdentifier = "ditag"
+        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: Self.farNotificationID(tag.id),
+                                                                     content: content, trigger: nil))
+    }
+
+    /// Back in good range (or gone completely): the "getting far" reminder no longer applies.
+    private func clearFarWarning(_ link: Link) {
+        link.weakCount = 0
+        guard link.farWarned else { return }
+        link.farWarned = false
+        UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [Self.farNotificationID(link.id)])
+    }
+
+    // MARK: - Battery
+
+    private func batteryRead(_ level: Int, for id: UUID) {
+        update(id) { $0.battery = level }
+        guard let tag = settings.tag(id) else { return }
+        if level >= Self.freshBattery, tag.lowBatteryWarned {
+            store.editTag(id) { $0.lowBatteryWarned = false }
+        } else if level > 0, level <= Self.lowBattery, !tag.lowBatteryWarned {
+            // Once per battery: a dead DiTAG looks exactly like a lost one.
+            store.editTag(id) { $0.lowBatteryWarned = true }
+            log(id, "Battery low (\(level)%)")
+            let content = UNMutableNotificationContent()
+            content.title = "\(tag.displayName): battery low"
+            content.body = "\(level)% left. It takes a CR2032 coin cell."
+            content.sound = .default
+            content.threadIdentifier = "ditag"
+            UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "ditag.battery." + id.uuidString,
+                                                                         content: content, trigger: nil))
+        }
     }
 
     /// The DiTAG's own snooze, plus the quiet hours and safe places shared with the watch alerts.
@@ -539,7 +701,7 @@ final class DiTagManager: NSObject, ObservableObject {
         alertNotificationPrefix + id.uuidString
     }
 
-    private func scheduleAlert(for tag: DiTag, at date: Date) {
+    private func scheduleAlert(for tag: DiTag) {
         let content = UNMutableNotificationContent()
         content.title = "\(tag.displayName) left behind"
         content.body = "Your DiTAG is out of range."
@@ -548,47 +710,66 @@ final class DiTagManager: NSObject, ObservableObject {
         content.categoryIdentifier = Self.alertCategory
         content.threadIdentifier = "ditag"
         content.userInfo = [Self.tagIDKey: tag.id.uuidString]
-        let delay = date.timeIntervalSinceNow
-        // A scheduled notification fires even if iOS suspends DiTether during the grace period.
-        let trigger = delay >= 1 ? UNTimeIntervalNotificationTrigger(timeInterval: delay, repeats: false) : nil
-        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: Self.notificationID(tag.id),
-                                                                     content: content, trigger: trigger))
+        // Scheduled notifications fire even if iOS suspends DiTether, and each one vibrates.
+        let center = UNUserNotificationCenter.current()
+        for (index, identifier) in Self.alertIDs(tag.id).enumerated() {
+            let delay = Double(index) * Self.followUpSpacing
+            let trigger = delay > 0 ? UNTimeIntervalNotificationTrigger(timeInterval: delay, repeats: false) : nil
+            let item = (content.mutableCopy() as? UNMutableNotificationContent) ?? content
+            if index > 0 {
+                item.body = "Still out of range."
+            }
+            center.add(UNNotificationRequest(identifier: identifier, content: item, trigger: trigger))
+        }
     }
 
-    /// Snoozed (or found to be in a safe place) while out of range: no alert after all.
+    /// The alert and its follow-ups.
+    private static func alertIDs(_ id: UUID) -> [String] {
+        [notificationID(id)] + followUpIDs(id)
+    }
+
+    private static func followUpIDs(_ id: UUID) -> [String] {
+        (1...followUps).map { notificationID(id) + ".\($0)" }
+    }
+
+    /// You've seen it (opened DiTether or tapped Found it): no more follow-up buzzes.
+    func stopFollowUps() {
+        let ids = links.values.filter { $0.episode != nil }.flatMap { Self.followUpIDs($0.id) }
+        guard !ids.isEmpty else { return }
+        let center = UNUserNotificationCenter.current()
+        center.removePendingNotificationRequests(withIdentifiers: ids)
+        center.removeDeliveredNotifications(withIdentifiers: ids)
+    }
+
+    /// Snoozed (or found to be in a safe place) while out of range: stop buzzing.
     private func silencePendingAlert(_ id: UUID) {
-        guard let link = links[id], let current = link.episode else { return }
-        UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [Self.notificationID(id)])
-        if let eventID = current.eventID, Date() < current.alertAt {
-            events.remove(id: eventID)
-            link.episode?.eventID = nil
-        }
-        link.graceTask?.cancel()
-        leaveGrace(id)
+        guard let link = links[id], link.episode != nil else { return }
+        let center = UNUserNotificationCenter.current()
+        center.removePendingNotificationRequests(withIdentifiers: Self.alertIDs(id))
+        center.removeDeliveredNotifications(withIdentifiers: Self.followUpIDs(id))
         stopAlarm(id)
     }
 
-    /// Back in range (or the episode was cancelled): a blip inside the grace period leaves no trace,
-    /// a real one gets its reconnect time.
+    /// Back in range (or the episode was cancelled): a blip of a few seconds leaves no trace, a real
+    /// one gets its reconnect time.
     private func endEpisode(_ link: Link, cancelled: Bool) {
-        link.graceTask?.cancel()
-        link.graceTask = nil
-        leaveGrace(link.id)
         update(link.id) { $0.lostAt = nil }
         guard let current = link.episode else { return }
         link.episode = nil
-        let notificationID = Self.notificationID(link.id)
+        let ids = Self.alertIDs(link.id)
         let center = UNUserNotificationCenter.current()
-        center.removePendingNotificationRequests(withIdentifiers: [notificationID])
+        center.removePendingNotificationRequests(withIdentifiers: ids)
+        center.removeDeliveredNotifications(withIdentifiers: Self.followUpIDs(link.id))
         stopAlarm(link.id)
         guard let eventID = current.eventID,
               var event = events.events.first(where: { $0.id == eventID }) else { return }
-        if Date() < current.alertAt {
+        if Date().timeIntervalSince(current.startedAt) < Self.blipWindow {
             events.remove(id: eventID)
+            center.removeDeliveredNotifications(withIdentifiers: ids)
         } else if !cancelled {
             event.resolvedAt = Date()
             events.upsert(event)
-            center.removeDeliveredNotifications(withIdentifiers: [notificationID])
+            center.removeDeliveredNotifications(withIdentifiers: ids)
         }
     }
 
@@ -600,14 +781,9 @@ final class DiTagManager: NSObject, ObservableObject {
         }
     }
 
-    private func leaveGrace(_ id: UUID) {
-        inGrace.remove(id)
-        if inGrace.isEmpty { endBackgroundTime() }
-    }
-
     private func beginBackgroundTime() {
         guard backgroundTask == .invalid else { return }
-        backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "DiTAG grace period") { [weak self] in
+        backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "DiTAG location") { [weak self] in
             Task { @MainActor in self?.endBackgroundTime() }
         }
     }
@@ -735,6 +911,8 @@ final class DiTagManager: NSObject, ObservableObject {
         }
         update(link.id) { $0.state = .connected }
         setWithMe(link.id, true)
+        lastAddedID = link.id
+        log(link.id, "Added")
         updateSignalReading()
     }
 
@@ -778,10 +956,14 @@ final class DiTagManager: NSObject, ObservableObject {
                 failSetup(message: managerState == .unauthorized ? nil : "Turn on Bluetooth to add a DiTAG.")
             }
             // Bluetooth turned off: you did that, so nothing is "left behind".
+            if !links.isEmpty {
+                log(nil, managerState == .unauthorized ? "Bluetooth not allowed" : "Bluetooth turned off: no alerts")
+            }
             for link in links.values {
                 silencePendingAlert(link.id)
                 endEpisode(link, cancelled: true)
                 stopBeepState(link)
+                clearFarWarning(link)
                 link.launchCheckTask?.cancel()
                 link.peripheral = nil   // fetched again when Bluetooth is back on
                 link.alertCharacteristic = nil
@@ -845,6 +1027,7 @@ final class DiTagManager: NSObject, ObservableObject {
         }
         guard let link = links[lost.identifier], let central else { return }
         link.alertCharacteristic = nil
+        log(link.id, "Out of range")
         // Ask again right away: iOS completes it whenever the DiTAG is back in range.
         central.connect(lost)
         beginEpisode(link, lostAt: Date())
@@ -893,7 +1076,7 @@ final class DiTagManager: NSObject, ObservableObject {
         switch characteristic.uuid {
         case DiTagUUID.batteryLevel:
             if let level = characteristic.value?.first {
-                update(id) { $0.battery = min(Int(level), 100) }
+                batteryRead(min(Int(level), 100), for: id)
             }
         case DiTagUUID.buttonPress:
             if isSetupPeripheral(owner) {
@@ -911,6 +1094,7 @@ final class DiTagManager: NSObject, ObservableObject {
     fileprivate func handleRSSI(_ owner: CBPeripheral, _ rssi: Int) {
         guard rssi < 0, status(owner.identifier).state == .connected else { return }
         update(owner.identifier) { $0.signal = rssi }
+        if let link = links[owner.identifier] { checkEarlyWarning(link, rssi: rssi) }
     }
 }
 

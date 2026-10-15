@@ -66,9 +66,7 @@ struct EventRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: icon)
-                .foregroundStyle(event.strongAlertAt != nil ? Color.red : Color.orange)
-                .font(.title3)
+            IconBadge(symbol: icon, color: event.strongAlertAt != nil ? .red : .orange, size: 40)
             VStack(alignment: .leading, spacing: 2) {
                 Text(event.startedAt.formatted(date: .omitted, time: .shortened))
                     .font(.headline)

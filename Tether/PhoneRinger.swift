@@ -26,7 +26,7 @@ final class PhoneRinger: ObservableObject {
         case watch
         /// The DiTAG button was double-pressed: find the iPhone.
         case tag
-        /// A DiTAG was left behind: vibrate, no sound (its notification has the sound).
+        /// A DiTAG was left behind: vibrate, with the alarm sound only if asked for.
         case leftBehind
     }
 
@@ -45,11 +45,11 @@ final class PhoneRinger: ObservableObject {
 
     /// True if the sound started.
     @discardableResult
-    func ring(_ reason: Reason = .watch) -> Bool {
+    func ring(_ reason: Reason = .watch, sound: Bool = true) -> Bool {
         // Finding the iPhone wins over the silent left-behind alarm.
         if isRinging, self.reason != .leftBehind, reason == .leftBehind { return true }
         stopTask?.cancel()
-        let audible = reason != .leftBehind
+        let audible = reason != .leftBehind || sound
         let session = AVAudioSession.sharedInstance()
         do {
             try session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
@@ -67,7 +67,7 @@ final class PhoneRinger: ObservableObject {
             player = nil
         }
         startVibrating()
-        if audible {
+        if reason != .leftBehind {
             postNotification(body: reason == .tag ? "Your DiTAG is looking for it." : "Your watch is looking for it.")
         }
         isRinging = true

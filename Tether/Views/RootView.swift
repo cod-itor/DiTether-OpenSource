@@ -3,24 +3,37 @@ import SwiftUI
 struct RootView: View {
     @EnvironmentObject private var model: PhoneModel
     @AppStorage(RootView.onboardedKey) private var hasOnboarded = false
+    @AppStorage(AppAppearance.storageKey) private var appearance = AppAppearance.system.rawValue
+    @State private var tab = Tab.home
 
     static let onboardedKey = "tether.onboarded"
 
+    enum Tab: Hashable {
+        case home, devices, history, settings
+    }
+
     var body: some View {
-        TabView {
-            StatusView()
-                .tabItem { Label("Status", systemImage: "applewatch") }
+        TabView(selection: $tab) {
+            HomeView { tab = .devices }
+                .tabItem { Label("Home", systemImage: "shield.lefthalf.filled") }
+                .tag(Tab.home)
+            DevicesView()
+                .tabItem { Label("Devices", systemImage: "dot.radiowaves.left.and.right") }
+                .tag(Tab.devices)
+                .badge(model.diTag.statuses.values.filter { $0.state == .lost }.count)
             HistoryView()
                 .tabItem { Label("History", systemImage: "clock.arrow.circlepath") }
-            DiTagView()
-                .tabItem { Label("DiTAG", systemImage: "tag") }
+                .tag(Tab.history)
             SettingsView()
                 .tabItem { Label("Settings", systemImage: "gearshape") }
+                .tag(Tab.settings)
         }
+        .tint(Theme.brand)
+        .preferredColorScheme(AppAppearance(rawValue: appearance)?.colorScheme)
         // Ringing (or the left-behind vibration) while DiTether is open: one tap stops it.
         .alert(ringTitle, isPresented: Binding(get: { model.ringer.isRinging },
-                                               set: { if !$0 { model.ringer.stop() } })) {
-            Button("Found it") { model.ringer.stop() }
+                                               set: { if !$0 { foundIt() } })) {
+            Button("Found it") { foundIt() }
         }
         .fullScreenCover(isPresented: Binding(get: { !hasOnboarded }, set: { hasOnboarded = !$0 })) {
             OnboardingView {
@@ -29,6 +42,11 @@ struct RootView: View {
             }
                 .environmentObject(model)
         }
+    }
+
+    private func foundIt() {
+        model.ringer.stop()
+        model.diTag.stopFollowUps()
     }
 
     private var ringTitle: String {

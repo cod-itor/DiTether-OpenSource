@@ -24,7 +24,8 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
                                             willPresent notification: UNNotification,
                                             withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
-        if notification.request.identifier.hasPrefix(DiTagManager.alertNotificationPrefix) {
+        // DiTAG notifications (left behind, getting far, battery) still show while DiTether is open.
+        if notification.request.identifier.hasPrefix("ditag.") {
             completionHandler([.banner, .list, .sound])
         } else {
             completionHandler([])

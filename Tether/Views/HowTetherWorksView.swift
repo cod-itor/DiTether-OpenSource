@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Plain-language background for anyone curious, moved off the Status screen to keep it short.
+/// Plain-language background for anyone curious, moved off Home to keep it short.
 struct HowTetherWorksView: View {
     var body: some View {
         List {
